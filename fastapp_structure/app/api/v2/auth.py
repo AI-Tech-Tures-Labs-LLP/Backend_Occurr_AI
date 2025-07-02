@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 from passlib.hash import bcrypt
 from jose import jwt, JWTError
@@ -18,18 +18,30 @@ class UserRegister(BaseModel):
     password: str
     email: EmailStr
     age: Optional[int] = Field(default=None, ge=0)
-    # gender: Optional[str] = Field(default=None, pattern="")
     gender: Optional[str] = Field(default=None, pattern="^(male|female|other)$")
+    height_cm: Optional[int] = Field(default=None, ge=0)
+    weight_kg: Optional[int] = Field(default=None, ge=0)
+    profession: Optional[str] = None
+    meditation_time: Optional[str] = Field(default=None, pattern="^\d{2}:\d{2}$")
+    exercise_time: Optional[str] = Field(default=None, pattern="^\d{2}:\d{2}$")
+    food_schedule: Optional[Dict[str, str]] = None
+    preferences: Optional[Dict[str, Any]] = None
 
 class UserLogin(BaseModel):
     username: str
     password: str
 
 class UserUpdate(BaseModel):
-    email: Optional[EmailStr]
+    email: Optional[EmailStr] = None
     age: Optional[int] = Field(default=None, ge=0)
-    # gender: Optional[str] = Field(default=None, regex="^(male|female|other)$")
     gender: Optional[str] = Field(default=None, pattern="^(male|female|other)$")
+    height_cm: Optional[int] = Field(default=None, ge=0)
+    weight_kg: Optional[int] = Field(default=None, ge=0)
+    profession: Optional[str] = None
+    meditation_time: Optional[str] = Field(default=None, pattern="^\d{2}:\d{2}$")
+    exercise_time: Optional[str] = Field(default=None, pattern="^\d{2}:\d{2}$")
+    food_schedule: Optional[Dict[str, str]] = None
+    preferences: Optional[Dict[str, Any]] = None
 
 def generate_token(username: str):
     from datetime import datetime, timedelta

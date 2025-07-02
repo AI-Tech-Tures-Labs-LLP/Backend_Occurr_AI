@@ -248,3 +248,4 @@ def get_journals_for_day(
         "count": len(entries),
         "entries": entries
     }
+ 
