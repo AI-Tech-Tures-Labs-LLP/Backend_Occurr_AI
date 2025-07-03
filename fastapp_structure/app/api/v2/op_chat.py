@@ -1,12 +1,12 @@
 
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException,WebSocket,WebSocketDisconnect
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from bson import ObjectId
 from datetime import datetime, timedelta
-import os, json, re
+import re, json, os, asyncio
 from openai import OpenAI as OpenAIClient
 
 # Database imports
@@ -44,6 +44,25 @@ llm = ChatOpenAI(
 
 loaded_indexes = {}
 incomplete_profile_sessions = {}
+
+
+# WebSocket manager for active connections
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, username: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections[username] = websocket
+
+    def disconnect(self, username: str):
+        self.active_connections.pop(username, None)
+
+    async def send_personal_message(self, username: str, message: str):
+        if username in self.active_connections:
+            await self.active_connections[username].send_text(message)
+
+manager = ConnectionManager()
 
 # Pydantic models
 class ChatRequest(BaseModel):
@@ -763,19 +782,131 @@ def get_recent_history(convo_id, limit: int = 6):
 
 
 
-def prompt_and_track(field: str, prompt: str, username: str, conversation_id):
-    global incomplete_profile_sessions
-    incomplete_profile_sessions[username] = field
-    save_message(conversation_id, "assistant", prompt)
-    return ChatResponse(
-        reply=prompt,
-        history=get_recent_history(conversation_id)["history"],
-        conversation_id=str(conversation_id),
-        query_type="profile_completion",
-        data_sources=[]
-    )
+@router.websocket("/ws/{username}")
+async def websocket_endpoint(websocket: WebSocket, username: str):
+    await manager.connect(username, websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.send_personal_message(username, f"Echo: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(username)
+
+def save_message(convo_id, role: str, content: str):
+    conversations_collection.update_one({"_id": convo_id}, {"$push": {"history": {"role": role, "content": content, "timestamp": datetime.utcnow()}}})
+
+def get_recent_history(convo_id, limit: int = 6):
+    convo = conversations_collection.find_one({"_id": convo_id})
+    return {"_id": str(convo_id), "history": convo.get("history", [])[-limit:] if convo else []}
+
+def get_or_create_conversation(convo_id: Optional[str], username: str):
+    if convo_id:
+        try:
+            obj_id = ObjectId(convo_id)
+            convo = conversations_collection.find_one({"_id": obj_id, "username": username})
+            if convo:
+                return obj_id
+        except:
+            raise HTTPException(status_code=400, detail="Invalid conversation ID")
+    result = conversations_collection.insert_one({"username": username, "history": [], "created_at": datetime.utcnow()})
+    return result.inserted_id
 
 
+async def check_abnormal_health_metrics(username: str) -> List[str]:
+    now = datetime.utcnow()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+
+    metrics = {
+        "heartRate": {"$gt": 120},
+        "spo2": {"$lt": 90},
+        "sleep": {"$lt": 300}  # minutes
+    }
+
+    alerts = []
+    for metric, condition in metrics.items():
+        query = {
+            "username": username,
+            "metric": metric,
+            "timestamp": {"$gte": start, "$lt": end},
+            "value": condition
+        }
+        if health_data_collection.find_one(query):
+            msg = {
+                "heartRate": "💓 High heart rate detected today.",
+                "spo2": "🫁 Low SpO₂ detected.",
+                "sleep": "😴 Low sleep duration detected."
+            }[metric]
+            alerts.append(msg)
+
+            alert_collection.insert_one({
+                "username": username,
+                "metric": metric,
+                "value": condition,
+                "timestamp": now,
+                "message": msg,
+                "responded": False,
+                "created_at": now
+            })
+
+    return alerts
+
+# ✅ Background task to trigger alerts/reminders async
+async def health_alert_reminder_background():
+    users = users_collection.find({})
+    now = datetime.utcnow()
+    for user in users:
+        username = user["username"]
+        food_schedule = user.get("food_schedule", {})
+        today_journal = journals_collection.find_one({
+            "username": username,
+            "timestamp": {"$gte": now.replace(hour=0, minute=0, second=0, microsecond=0)}
+        }) or {}
+
+        def should_prompt(activity, time_str):
+            if not time_str:
+                return False
+            try:
+                hour, minute = map(int, time_str.split(":"))
+                scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                return now >= scheduled and not today_journal.get(activity)
+            except:
+                return False
+
+        reminders = []
+        for meal in ["breakfast", "lunch", "dinner"]:
+            if should_prompt("food_intake", food_schedule.get(meal)):
+                reminders.append(f"🍽️ {username}, have you eaten {meal}?")
+
+        if should_prompt("personal", user.get("meditation_time")):
+            reminders.append(f"🧘 {username}, did you meditate today?")
+        if should_prompt("work_or_study", user.get("exercise_time")):
+            reminders.append(f"🏋️ {username}, did you work out today?")
+
+        manual_alerts = []
+        if user.get("weight_kg", 0) > 100:
+            manual_alerts.append("⚠️ Your weight is above 100kg. Consider a health check or routine exercise.")
+
+        abnormal_alerts = await check_abnormal_health_metrics(username)
+
+        all_alerts = reminders + manual_alerts + abnormal_alerts
+        if all_alerts:
+            convo_id = get_or_create_conversation(None, username)
+            message = "\n".join(all_alerts)
+            save_message(convo_id, "assistant", message)
+            await manager.send_personal_message(username, message)
+
+@router.on_event("startup")
+async def run_health_background():
+    asyncio.create_task(health_alert_reminder_background())
+
+@router.get("/background/reminders")
+async def manual_health_alert_trigger(token: str = Depends(oauth2_scheme)):
+    valid, username = decode_token(token)
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    await health_alert_reminder_background()
+    return {"message": "✅ Health reminders triggered successfully."}
 # ============================================================================
 # MAIN API ENDPOINT
 # ============================================================================
@@ -807,21 +938,28 @@ def ask_chatbot(req: ChatRequest, token: str = Depends(oauth2_scheme)):
     user = users_collection.find_one({"username": username}) or {}
     food_schedule = user.get("food_schedule", {})
 
-    if any(kw in query.lower() for kw in ["i ate", "i had", "i have eaten", "today i ate"]):
+
+    if value in {"no", "nope", "not now", "skip", "maybe later","nah", "not interested"}:
+            reply = f"👍 Got it! We’ll skip setting your {field.replace('_', ' ')} for now."
+            save_message(conversation_id, "assistant", reply)
+            return ChatResponse(
+                reply=reply,
+                history=get_recent_history(conversation_id)["history"],
+                conversation_id=str(conversation_id),
+                query_type="profile_completion",
+                data_sources=[]
+            )
+    
+
+    if any(kw in query.lower() for kw in ["i ate", "i had", "i have eaten", "today i ate", "breakfast", "lunch", "dinner"]):
         journals_collection.update_one(
             {
                 "username": username,
                 "timestamp": {"$gte": datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)}
             },
             {
-                "$set": {"food_intake": query.strip()},
-                "$setOnInsert": {
-                    "username": username,
-                    "timestamp": datetime.utcnow(),
-                    "entry_type": "freeform",
-                    "tags": ["food_intake"],
-                    "response": query.strip()
-                }
+                "$set": {"food_intake": query.strip(), "updated_at": datetime.utcnow()},
+                "$setOnInsert": {"username": username, "timestamp": datetime.utcnow(), "entry_type": "freeform", "tags": ["food_intake"], "response": query.strip()}
             },
             upsert=True
         )
@@ -835,6 +973,72 @@ def ask_chatbot(req: ChatRequest, token: str = Depends(oauth2_scheme)):
             data_sources=["journal"]
         )
 
+    if any(kw in query.lower() for kw in ["worked on", "studied", "did work", "assignment", "project"]):
+        journals_collection.update_one(
+            {
+                "username": username,
+                "timestamp": {"$gte": datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)}
+            },
+            {
+                "$set": {"work_or_study": query.strip(), "updated_at": datetime.utcnow()},
+                "$setOnInsert": {"username": username, "timestamp": datetime.utcnow(), "entry_type": "freeform", "tags": ["work_or_study"], "response": query.strip()}
+            },
+            upsert=True
+        )
+        confirmation = "📚 Logged your work/study activity for today."
+        save_message(conversation_id, "assistant", confirmation)
+        return ChatResponse(
+            reply=confirmation,
+            history=get_recent_history(conversation_id)["history"],
+            conversation_id=str(conversation_id),
+            query_type="journal_entry",
+            data_sources=["journal"]
+        )
+
+    if any(kw in query.lower() for kw in ["slept", "sleep", "nap", "went to bed", "woke up"]):
+        journals_collection.update_one(
+            {
+                "username": username,
+                "timestamp": {"$gte": datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)}
+            },
+            {
+                "$set": {"sleep": query.strip(), "updated_at": datetime.utcnow()},
+                "$setOnInsert": {"username": username, "timestamp": datetime.utcnow(), "entry_type": "freeform", "tags": ["sleep"], "response": query.strip()}
+            },
+            upsert=True
+        )
+        confirmation = "😴 Got it. Sleep info logged for today."
+        save_message(conversation_id, "assistant", confirmation)
+        return ChatResponse(
+            reply=confirmation,
+            history=get_recent_history(conversation_id)["history"],
+            conversation_id=str(conversation_id),
+            query_type="journal_entry",
+            data_sources=["journal"]
+        )
+
+    if any(kw in query.lower() for kw in ["felt", "emotion", "mood", "personal", "mental", "anxious", "happy", "sad"]):
+        journals_collection.update_one(
+            {
+                "username": username,
+                "timestamp": {"$gte": datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)}
+            },
+            {
+                "$set": {"personal": query.strip(), "updated_at": datetime.utcnow()},
+                "$setOnInsert": {"username": username, "timestamp": datetime.utcnow(), "entry_type": "freeform", "tags": ["personal"], "response": query.strip()}
+            },
+            upsert=True
+        )
+        confirmation = "🧠 Logged your personal notes for today."
+        save_message(conversation_id, "assistant", confirmation)
+        return ChatResponse(
+            reply=confirmation,
+            history=get_recent_history(conversation_id)["history"],
+            conversation_id=str(conversation_id),
+            query_type="journal_entry",
+            data_sources=["journal"]
+        )
+                
     if is_greeting(query):
         greeting_response = get_time_based_greeting()
         save_message(conversation_id, "assistant", greeting_response)
@@ -945,6 +1149,7 @@ def ask_chatbot(req: ChatRequest, token: str = Depends(oauth2_scheme)):
         query_type=query_type,
         data_sources=data_sources
     )
+
 # ============================================================================
 # ADDITIONAL ENDPOINTS
 # ============================================================================

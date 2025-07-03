@@ -149,8 +149,6 @@ def save_health_data(username: str, payload: dict):
 
 
 
-
-
 def get_health_data_by_range(username: str, start: datetime, end: datetime):
     return list(health_data_collection.find({
         "username": username,
