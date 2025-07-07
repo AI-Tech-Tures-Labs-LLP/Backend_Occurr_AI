@@ -21,8 +21,18 @@ from fastapi.openapi.utils import get_openapi
 
 # ✅ Allow all origins, methods, and headers (adjust as needed for production)
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from app.db.database import db
+from app.utils.task_helper import generate_daily_tasks_from_profile,check_and_notify_pending_tasks_for_all_users
 
 app = FastAPI(title="Smart Assistant API")
+
+
+
+
+
+scheduler = BackgroundScheduler()
+
 
 
 
@@ -80,6 +90,22 @@ def test_mongo():
     except Exception as e:
         return {"error": str(e)}
 
-@app.on_event("startup")
-def start_everything():
-    start_scheduler()
+
+
+def scheduled_task_generation():
+    # Get all users to generate tasks for them
+    users = db["users"].find()
+    for user in users:
+        generate_daily_tasks_from_profile(user)
+
+
+def scheduled_task_completion():
+        # Check and notify pending tasks for each user
+        check_and_notify_pending_tasks_for_all_users()
+      
+# Schedule the task to run daily at midnight
+scheduler.add_job(scheduled_task_generation, 'cron', hour=0, minute=0)
+scheduler.add_job(scheduled_task_completion, 'interval', seconds=30)
+
+# Start the scheduler
+scheduler.start()

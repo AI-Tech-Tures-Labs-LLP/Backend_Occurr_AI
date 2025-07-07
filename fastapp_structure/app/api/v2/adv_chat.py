@@ -18,6 +18,7 @@ from app.api.auth.auth import decode_token
 import time
 from app.utils.optimized_code_rag import load_faiss_index,query_documents
 from app.core.advance_chatbot import normalize, apply_personality
+from app.db.notification_model import notifications_collection
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -424,13 +425,21 @@ def fetch_personal_data(queries: Dict, username: str) -> Dict[str, List]:
         try:
             print(f"🔍 Processing {key} query: {query}")
             
+            # if key == "user_notifications":
+            #     user = users_collection.find_one({"username": username})
+            #     if user and "notifications" in user:
+            #         results[key] = user["notifications"]
+            #         print(f"✅ Found {len(results[key])} notifications")
+            #     else:
+            #         print("❌ No notifications found")
             if key == "user_notifications":
-                user = users_collection.find_one({"username": username})
-                if user and "notifications" in user:
-                    results[key] = user["notifications"]
-                    print(f"✅ Found {len(results[key])} notifications")
-                else:
-                    print("❌ No notifications found")
+            
+                results[key] = list(notifications_collection.find(
+                    {"username": username},
+                    {"_id": 0}
+                ))
+                print(f"✅ Found {len(results[key])} user notifications")
+
                     
             elif isinstance(query, list):
                 # Convert ISO date strings to datetime objects in the query

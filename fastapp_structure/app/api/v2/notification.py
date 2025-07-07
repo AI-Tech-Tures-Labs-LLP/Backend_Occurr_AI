@@ -10,6 +10,7 @@ from openai import OpenAI
 from app.api.auth.auth import decode_token
 from app.db.database import users_collection
 from app.db.health_data_model import alert_collection
+from app.db.notification_model import notifications_collection
 from bson import ObjectId
 import os
 from app.core.chatbot_engine import client
@@ -33,23 +34,54 @@ def get_notifications(token: str = Depends(oauth2_scheme)):
     if not valid:
         raise HTTPException(status_code=401, detail=username)
 
-    user = users_collection.find_one({"username": username}, {"notifications": 1})
+    user = notifications_collection.find_one({"username": username})
     return user.get("notifications", [])
 
 
+# @router.post("/mark_notification_read")
+# def mark_read(index: int = Body(...), token: str = Depends(oauth2_scheme)):
+#     valid, username = decode_token(token)
+#     if not valid:
+#         raise HTTPException(status_code=401, detail=username)
+
+#     users_collection.update_one(
+#         {"username": username},
+#         {"$set": {f"notifications.{index}.read": True}}
+#     )
+#     return {"message": "Marked as read"}
+
 @router.post("/mark_notification_read")
-def mark_read(index: int = Body(...), token: str = Depends(oauth2_scheme)):
+def mark_read(notification_id: str = Body(...), token: str = Depends(oauth2_scheme)):
     valid, username = decode_token(token)
     if not valid:
         raise HTTPException(status_code=401, detail=username)
 
-    users_collection.update_one(
-        {"username": username},
-        {"$set": {f"notifications.{index}.read": True}}
+    result = notifications_collection.update_one(
+        {"_id": ObjectId(notification_id), "username": username},
+        {"$set": {"read": True}}
     )
-    return {"message": "Marked as read"}
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    return {"message": "Notification marked as read"}
 
 
+
+# @router.get("/notifications/unread")
+# def get_unread_notifications(token: str = Depends(oauth2_scheme)):
+#     valid, username = decode_token(token)
+#     if not valid:
+#         raise HTTPException(status_code=401, detail=username)
+
+#     user = users_collection.find_one({"username": username}, {"notifications": 1})
+#     all_notifications = user.get("notifications", [])
+#     unread = [n for n in all_notifications if not n.get("read", False)]
+
+#     return {
+#         "count": len(unread),
+#         "notifications": unread
+#     }
 
 @router.get("/notifications/unread")
 def get_unread_notifications(token: str = Depends(oauth2_scheme)):
@@ -57,14 +89,19 @@ def get_unread_notifications(token: str = Depends(oauth2_scheme)):
     if not valid:
         raise HTTPException(status_code=401, detail=username)
 
-    user = users_collection.find_one({"username": username}, {"notifications": 1})
-    all_notifications = user.get("notifications", [])
-    unread = [n for n in all_notifications if not n.get("read", False)]
+    unread = list(notifications_collection.find(
+        {"username": username, "read": False}
+    ))
+
+    # Convert ObjectId to string for JSON compatibility
+    for n in unread:
+        n["_id"] = str(n["_id"])
 
     return {
         "count": len(unread),
         "notifications": unread
     }
+
 
 @router.get("/alerts/")
 def get_alerts(token: str = Depends(oauth2_scheme)):
