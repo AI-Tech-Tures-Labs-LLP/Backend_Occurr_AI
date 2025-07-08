@@ -15,7 +15,6 @@ from app.api.auth import routes as auth_router
 from app.db.database import db  # ✅ import the `db` object, not the module
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.utils.settings_secheduler import start_scheduler
 
 from fastapi.openapi.utils import get_openapi
 
@@ -24,7 +23,7 @@ from fastapi.openapi.utils import get_openapi
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.db.database import db
 from app.utils.task_helper import generate_daily_tasks_from_profile,check_and_notify_pending_tasks_for_all_users
-
+from app.utils.settings_secheduler import check_journal_times
 app = FastAPI(title="Smart Assistant API")
 
 
@@ -92,20 +91,32 @@ def test_mongo():
 
 
 
+
+
 def scheduled_task_generation():
-    # Get all users to generate tasks for them
+    print("⏰ Running daily task generation...")
     users = db["users"].find()
     for user in users:
         generate_daily_tasks_from_profile(user)
 
-
 def scheduled_task_completion():
-        # Check and notify pending tasks for each user
-        check_and_notify_pending_tasks_for_all_users()
-      
-# Schedule the task to run daily at midnight
-scheduler.add_job(scheduled_task_generation, 'cron', hour=0, minute=0)
-scheduler.add_job(scheduled_task_completion, 'interval', seconds=30)
+    print("⏰ Checking for pending tasks...")
+    check_and_notify_pending_tasks_for_all_users()
 
-# Start the scheduler
-scheduler.start()
+def scheduled_journal_check():
+    print("⏰ Running journal reminder check...")
+    check_journal_times()
+
+
+
+@app.on_event("startup")
+def on_startup():
+
+    # Register all jobs
+    scheduler.add_job(scheduled_task_generation, 'cron', minute=30, id="generate_daily_tasks")
+    scheduler.add_job(scheduled_task_completion, 'interval', seconds=30, id="check_pending_tasks")
+    scheduler.add_job(scheduled_journal_check, 'interval', minutes=1, id="check_journal_times", misfire_grace_time=60)
+
+    # Start scheduler
+    scheduler.start()
+
