@@ -94,17 +94,17 @@ def test_mongo():
 
 
 def scheduled_task_generation():
-    print("⏰ Running daily task generation...")
+    # print("⏰ Running daily task generation...")
     users = db["users"].find()
     for user in users:
         generate_daily_tasks_from_profile(user)
 
 def scheduled_task_completion():
-    print("⏰ Checking for pending tasks...")
+    # print("⏰ Checking for pending tasks...")
     check_and_notify_pending_tasks_for_all_users()
 
 def scheduled_journal_check():
-    print("⏰ Running journal reminder check...")
+    # print("⏰ Running journal reminder check...")
     check_journal_times()
 
 
@@ -113,9 +113,9 @@ def scheduled_journal_check():
 def on_startup():
 
     # Register all jobs
-    scheduler.add_job(scheduled_task_generation, 'cron', minute=30, id="generate_daily_tasks")
-    scheduler.add_job(scheduled_task_completion, 'interval', seconds=30, id="check_pending_tasks")
-    scheduler.add_job(scheduled_journal_check, 'interval', minutes=1, id="check_journal_times", misfire_grace_time=60)
+    scheduler.add_job(scheduled_task_generation, 'interval', seconds=30, id="generate_daily_tasks", replace_existing=True)
+    scheduler.add_job(scheduled_task_completion, 'interval', seconds=30, id="check_pending_tasks", replace_existing=True)
+    scheduler.add_job(scheduled_journal_check, 'interval', seconds=30, id="check_journal_times", misfire_grace_time=60, replace_existing=True)
 
     # Start scheduler
     scheduler.start()

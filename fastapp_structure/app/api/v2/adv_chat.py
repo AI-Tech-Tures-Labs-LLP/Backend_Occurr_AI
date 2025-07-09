@@ -749,7 +749,7 @@ def get_or_create_conversation(convo_id: Optional[str], username: str):
 def save_message(convo_id, role: str, content: str):
     """Save message to conversation history"""
     conversations_collection.update_one(
-        {"_id": convo_id},
+        {"_id": ObjectId(convo_id)},
         {
             "$push": {
                 "history": {

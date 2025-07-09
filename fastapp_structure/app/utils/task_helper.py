@@ -95,17 +95,7 @@ def generate_daily_tasks_from_profile(user):
             "expires_at": dt_end_of_day()
         })
 
-    # Insert tasks into MongoDB
-    # for task in task_templates:
-    #     task_doc = build_task_doc(
-    #         username=username,
-    #         type=task["type"],
-    #         title=task["title"],
-    #         trigger_time=task["trigger_time"],
-    #         expires_at=task["expires_at"],  # Set expiration to the end of the day
-    #         metadata=task.get("metadata")
-    #     )
-    #     task_collection.insert_one(task_doc)
+
 
 
     for task in task_templates:
@@ -117,7 +107,7 @@ def generate_daily_tasks_from_profile(user):
         })
 
         if existing:
-            print(f"⏩ Task already exists for {username}: {task['title']} at {task['trigger_time']}")
+            # print(f"⏩ Task already exists for {username}: {task['title']} at {task['trigger_time']}")
             continue
 
         task_doc = build_task_doc(

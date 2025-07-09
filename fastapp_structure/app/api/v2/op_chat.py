@@ -17,6 +17,9 @@ import time
 from app.utils.optimized_code_rag import load_faiss_index,query_documents
 from app.core.advance_chatbot import  apply_personality
 from dotenv import load_dotenv
+
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 from app.api.v2.adv_chat import *
 
 load_dotenv()
@@ -162,11 +165,185 @@ def detect_collection_from_query(query: str) -> str:
     return "journals_collection"  # default fallback
 
 
+# def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
+#     convo_id = request.conversation_id or str(ObjectId())
+#     history = conversation_store.get(convo_id, [])
+
+#     # 🧠 Step 1: Ask LLM to classify the message
+#     response = client.chat.completions.create(
+#         model=os.getenv("OPENAI_API_MODEL", "gpt-4"),
+#         messages=[
+#             {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+#             {"role": "user", "content": request.question}
+#         ],
+#         temperature=0.5
+#     )
+
+#     raw_reply = response.choices[0].message.content.strip()
+
+#     # 🧼 Step 2: Clean and parse the response (handle triple-backtick JSON)
+#     cleaned_reply = re.sub(r"^```(?:json)?|```$", "", raw_reply.strip(), flags=re.MULTILINE).strip()
+
+#     try:
+#         parsed = json.loads(cleaned_reply)
+#         reply = parsed.get("reply", raw_reply)
+#         intent = parsed.get("intent", "unknown")
+#         tag = parsed.get("tag")
+#         collection = parsed.get("collection")
+#     except json.JSONDecodeError:
+#         reply = raw_reply
+#         intent = "unknown"
+#         tag = None
+#         collection = None
+
+#     # 💬 Step 3: Store history
+#     # if conversation_store.get(convo_id):
+#     #     history = conversation_store[convo_id]
+#     #     # Overwrite last assistant message if it exists
+#     # if history and history[-1]["role"] == "assistant":
+#     #     history[-1]["content"] = reply
+#     # else:
+#     #     history.append({"role": "assistant", "content": reply})
+#     # conversation_store[convo_id] = history[-10:]
+
+#     history.append({"role": "user", "content": request.question})
+#     history.append({"role": "assistant", "content": reply})
+#     conversation_store[convo_id] = history[-10:]
+
+#     # 🗃️ Step 4: Handle mongo_query
+#     if intent == "mongo_query":
+#         context_info = {
+#             "date": request.date,
+#             "start_date": request.start_date,
+#             "end_date": request.end_date,
+#             "conversation_id": convo_id
+#         }
+
+#         # Add NLP-based date extraction if not provided
+#         if not request.start_date and not request.end_date:
+#             context_info.update(extract_date_context(request.question))
+
+#         # Fallback to keyword detection if LLM didn’t provide collection
+#         if not collection:
+#             collection = detect_collection_from_query(request.question)
+
+#         print("🔍 Processing MongoDB query with context:", context_info)
+
+#         # Step 4b: Build query using collection info
+#         context_info["collection"] = collection
+#         mongo_query = generate_ai_mongo_query_with_fallback(request.question, username, context_info)
+#         print(f"🧠 AI Mongo Query:\n{json.dumps(mongo_query, indent=2)}")
+
+#         # Step 4c: Fetch data
+#         personal_data = fetch_personal_data(mongo_query, username)
+#         print(f"📦 MongoDB Results:\n{json.dumps(personal_data, indent=2, default=str)}")
+
+#         # Step 4d: Generate reply
+#         personal_context = build_comprehensive_context(personal_data, username)
+#         if personal_context and "No recent data" not in personal_context:
+#             reply = apply_personality(personal_context, "friendly")
+#         else:
+#             reply = apply_personality(
+#                 "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
+#                 "friendly"
+#             )
+
+#         save_message(convo_id, "assistant", reply)
+
+#     # 📚 Step 5: Handle knowledge_query
+#     elif intent == "knowledge_query":
+#         kb_context = []
+#         print("🔄 Searching knowledge base...")
+#         try:
+#             index_descriptions = load_index_descriptions_from_folders(FAISS_FOLDER_PATH)
+#             best_index_name = find_best_matching_index(request.question, index_descriptions)
+
+#             if best_index_name:
+#                 index_path = os.path.join(FAISS_FOLDER_PATH, best_index_name)
+#                 if os.path.exists(os.path.join(index_path, "index.faiss")) and os.path.exists(os.path.join(index_path, "index.pkl")):
+#                     print(f"🔍 Querying FAISS: {best_index_name}")
+#                     kb_snippets = query_documents(request.question, index_path)
+#                     if kb_snippets:
+#                         kb_context.extend(kb_snippets)
+#                         answer = apply_personality("\n\n".join(kb_context), "friendly")
+#                         save_message(convo_id, "assistant", answer)
+                      
+#             else:
+#                 print("⚠️ No match found for this knowledge query.")
+#         except Exception as e:
+#             print(f"❌ Knowledge base error: {e}")
+
+
+#     save_message(convo_id, "assistant", reply)
+#     final_response = apply_personality(reply, "friendly")
+    
+#     # STEP 7: Get recent history and return response
+#     recent = get_recent_history(convo_id)
+#     print("Reply : ",reply)
+#     print("Answer :", answer)
+
+# #     return ChatResponse(
+# #         reply == history[-1]["content"],
+# #         history=history,
+# #         conversation_id=convo_id,
+# #         query_type=intent,
+# #         data_sources=[tag] if tag else []
+# #  )
+
+
+#     return ChatResponse(
+#         reply=final_response,
+#         history=recent["history"],
+#         conversation_id=convo_id,
+#         query_type=intent,
+#         data_sources=[tag] if tag else []
+#     )
+
+def get_embedding(text: str) -> np.ndarray:
+    response = client.embeddings.create(
+        model="text-embedding-ada-002",
+        input=text
+    )
+    return np.array(response.data[0].embedding)
+
+
+def choose_relevant_reply(raw_reply: str, context_reply: str, question: str) -> str:
+    if not context_reply:
+        return raw_reply
+    if not raw_reply:
+        return context_reply
+
+    try:
+        question_vec = get_embedding(question)
+        raw_vec = get_embedding(raw_reply)
+        context_vec = get_embedding(context_reply)
+
+        raw_score = cosine_similarity([question_vec], [raw_vec])[0][0]
+        context_score = cosine_similarity([question_vec], [context_vec])[0][0]
+
+        print(f"🔍 Relevance scores — raw: {raw_score:.4f}, context: {context_score:.4f}")
+        return context_reply if context_score >= raw_score else raw_reply
+
+    except Exception as e:
+        print(f"⚠️ Fallback to keyword match due to embedding error: {e}")
+        # fallback to keyword method
+        raw_score = sum(1 for word in question.lower().split() if word in raw_reply.lower())
+        context_score = sum(1 for word in question.lower().split() if word in context_reply.lower())
+
+        print("🧠 Choosing relevant reply using embeddings...")
+        print("🟢 Question:", question)
+        print("🟡 Raw Reply:", raw_reply[:100])
+        print("🔵 Context Reply:", context_reply[:100])
+        return context_reply if context_score >= raw_score else raw_reply
+
+
 def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
-    convo_id = request.conversation_id or str(ObjectId())
+    convo_object_id = get_or_create_conversation(request.conversation_id, username)
+    convo_id = str(convo_object_id)
+    save_message(convo_id, "user", request.question)
     history = conversation_store.get(convo_id, [])
 
-    # 🧠 Step 1: Ask LLM to classify the message
+    # Step 1: Ask LLM to classify the message
     response = client.chat.completions.create(
         model=os.getenv("OPENAI_API_MODEL", "gpt-4"),
         messages=[
@@ -176,29 +353,25 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         temperature=0.5
     )
 
-    raw_reply = response.choices[0].message.content.strip()
+    raw_llm_reply = response.choices[0].message.content.strip()
 
-    # 🧼 Step 2: Clean and parse the response (handle triple-backtick JSON)
-    cleaned_reply = re.sub(r"^```(?:json)?|```$", "", raw_reply.strip(), flags=re.MULTILINE).strip()
-
+    # Step 2: Parse LLM reply
+    cleaned_reply = re.sub(r"^```(?:json)?|```$", "", raw_llm_reply.strip(), flags=re.MULTILINE).strip()
     try:
         parsed = json.loads(cleaned_reply)
-        reply = parsed.get("reply", raw_reply)
+        raw_reply = parsed.get("reply", raw_llm_reply)
         intent = parsed.get("intent", "unknown")
         tag = parsed.get("tag")
         collection = parsed.get("collection")
     except json.JSONDecodeError:
-        reply = raw_reply
+        raw_reply = raw_llm_reply
         intent = "unknown"
         tag = None
         collection = None
 
-    # 💬 Step 3: Store history
-    history.append({"role": "user", "content": request.question})
-    history.append({"role": "assistant", "content": reply})
-    conversation_store[convo_id] = history[-10:]
+    context_reply = None  # reply generated from mongo/knowledge base
 
-    # 🗃️ Step 4: Handle mongo_query
+    # Step 3: Handle mongo_query
     if intent == "mongo_query":
         context_info = {
             "date": request.date,
@@ -207,38 +380,33 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
             "conversation_id": convo_id
         }
 
-        # Add NLP-based date extraction if not provided
         if not request.start_date and not request.end_date:
             context_info.update(extract_date_context(request.question))
 
-        # Fallback to keyword detection if LLM didn’t provide collection
         if not collection:
             collection = detect_collection_from_query(request.question)
 
         print("🔍 Processing MongoDB query with context:", context_info)
-
-        # Step 4b: Build query using collection info
         context_info["collection"] = collection
+
         mongo_query = generate_ai_mongo_query_with_fallback(request.question, username, context_info)
         print(f"🧠 AI Mongo Query:\n{json.dumps(mongo_query, indent=2)}")
 
-        # Step 4c: Fetch data
         personal_data = fetch_personal_data(mongo_query, username)
         print(f"📦 MongoDB Results:\n{json.dumps(personal_data, indent=2, default=str)}")
 
-        # Step 4d: Generate reply
         personal_context = build_comprehensive_context(personal_data, username)
         if personal_context and "No recent data" not in personal_context:
-            reply = apply_personality(personal_context, "friendly")
+            context_reply = apply_personality(personal_context, "friendly")
         else:
-            reply = apply_personality(
+            context_reply = apply_personality(
                 "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
                 "friendly"
             )
 
-        save_message(convo_id, "assistant", reply)
+        # save_message(convo_id, "assistant", context_reply)
 
-    # 📚 Step 5: Handle knowledge_query
+    # Step 4: Handle knowledge_query
     elif intent == "knowledge_query":
         kb_context = []
         print("🔄 Searching knowledge base...")
@@ -253,16 +421,38 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
                     kb_snippets = query_documents(request.question, index_path)
                     if kb_snippets:
                         kb_context.extend(kb_snippets)
-                        reply = apply_personality("\n\n".join(kb_context), "friendly")
-                        save_message(convo_id, "assistant", reply)
+                        context_reply = apply_personality("\n\n".join(kb_context), "friendly")
+                        # save_message(convo_id, "assistant", context_reply)
             else:
                 print("⚠️ No match found for this knowledge query.")
         except Exception as e:
             print(f"❌ Knowledge base error: {e}")
 
+    # Step 5: Decide which reply to use
+    final_reply = choose_relevant_reply(
+    apply_personality(raw_reply, "friendly"),
+    context_reply,
+    request.question
+     )
+
+    # Step 6: Store to history
+    history.append({"role": "user", "content": request.question})
+    history.append({"role": "assistant", "content": final_reply})
+    conversation_store[convo_id] = history[-10:]
+
+  # reply generated from mongo/knowledge base
+    print("Context Reply", context_reply )
+    print("🧾 Reply:", raw_reply)
+    print("📚 History:", conversation_store[convo_id])
+
+    
+    save_message(convo_id, "assistant", context_reply)
+    
+
+    # Step 7: Return response
     return ChatResponse(
-        reply=reply,
-        history=history,
+        reply=final_reply,
+        history=conversation_store[convo_id],
         conversation_id=convo_id,
         query_type=intent,
         data_sources=[tag] if tag else []

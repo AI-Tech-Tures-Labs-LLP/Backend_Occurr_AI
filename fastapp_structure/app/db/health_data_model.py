@@ -79,7 +79,6 @@ def create_health_alert(username, metric, value, timestamp):
         "created_at": datetime.utcnow().replace(tzinfo=timezone.utc)
     })
 
-
     notifications_collection.insert_one({
         "username": username,
         "title": f"Health Alert: {metric.capitalize()}",
