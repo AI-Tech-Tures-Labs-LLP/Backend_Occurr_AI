@@ -32,6 +32,7 @@ class UserRegister(BaseModel):
     username: str
     password: str
     email: EmailStr
+    date_of_birth: Optional[datetime] = None
     age: Optional[int] = Field(None, ge=0)
     gender: Optional[str] = Field(None, pattern="^(male|female|other)$")
     height_cm: Optional[int] = Field(None, ge=0)
@@ -43,6 +44,7 @@ class UserRegister(BaseModel):
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     age: Optional[int] = Field(None, ge=0)
+    date_of_birth: Optional[datetime] = None
     gender: Optional[str] = Field(None, pattern="^(male|female|other)$")
     height_cm: Optional[int] = Field(None, ge=0)
     weight_kg: Optional[int] = Field(None, ge=0)
@@ -112,6 +114,7 @@ def register(user: UserRegister):
         "password": hashed,
         "email": user.email,
         "age": user.age,
+        "date_of_birth": user.date_of_birth,
         "gender": user.gender,
         "height_cm": user.height_cm,
         "weight_kg": user.weight_kg,
