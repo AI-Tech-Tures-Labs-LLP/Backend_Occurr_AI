@@ -591,13 +591,54 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
         context.append("🚨 **Recent Alerts**:\n" + "\n".join(alerts[:5]))
     
     # Journal entries analysis
-    if data["journal"]:
-        entries = [
-            f"{d.get('timestamp').strftime('%Y-%m-%d') if isinstance(d.get('timestamp'), datetime) else str(d.get('timestamp'))[:10]} | Sleep: {d.get('sleep', 'N/A')} | Note: {d.get('extra_note', 'N/A')}"
-            for d in data["journal"]
-        ]
-        context.append("📝 **Recent Journal Entries**:\n" + "\n".join(entries[:3]))
+    # if data["journal"]:
+    #     entries = [
+    #         f"{d.get('timestamp').strftime('%Y-%m-%d') if isinstance(d.get('timestamp'), datetime) else str(d.get('timestamp'))[:10]} | Sleep: {d.get('sleep', 'N/A')} | Note: {d.get('extra_note', 'N/A')}"
+    #         for d in data["journal"]
+    #     ]
+    #     context.append("📝 **Recent Journal Entries**:\n" + "\n".join(entries[:3]))
+
+    # if data["journal"]:
+    #     tag_map = {
+    #         "food_intake": "Food",
+    #         "sleep": "Sleep",
+    #         "mood": "Mood",
+    #         "meditation": "Meditation",
+    #         "personal": "Personal Note",
+    #         "work_or_study": "Work/Study",
+    #         "extra_note": "Note"
+    #     }
+
+    #     tag_summary = {}
+
+    #     for entry in data["journal"]:
+    #         tag = entry.get("tag", "unknown")
+    #         readable = tag_map.get(tag, tag.replace("_", " ").title())
+    #         text = entry.get("text", "")
+    #         tag_summary.setdefault(readable, []).append(text)
+
+    #     summary_lines = ["📝 **Today's Journal Summary**:"]
+    #     for tag, notes in tag_summary.items():
+    #         summary_lines.append(f"• {tag}: {' | '.join(notes)}")
+
+    #     context.append("\n".join(summary_lines))
     
+    if data["journal"]:
+        journal_texts = [entry.get("text", "") for entry in data["journal"] if entry.get("text")]
+
+        if journal_texts:
+            prompt = (
+                "Summarize the following journal entries into a short and friendly summary. "
+                "Group similar thoughts (food, sleep, mood, etc), and highlight anything important:\n\n"
+                + "\n".join(f"- {text}" for text in journal_texts)
+            )
+
+            # Use your LLM wrapper or direct call to DeepSeek/GPT
+            ai_summary = apply_personality(prompt, "friendly")
+            context.append(f"📝 **AI Journal Summary**:\n{ai_summary}")
+
+
+
     # Notifications analysis
     if data.get("user_notifications"):
         unread = [n for n in data["user_notifications"] if not n.get("read", True)]

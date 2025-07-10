@@ -41,7 +41,19 @@ llm = ChatOpenAI(
     model=os.getenv("OPENAI_API_MODEL")
 )
 
+
+
+# Initialize once globally
+hf_embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2",
+    model_kwargs={'device': 'cpu'},
+    encode_kwargs={'normalize_embeddings': True}
+)
+
+
 loaded_indexes = {}
+# In-memory store to track pending journal confirmations
+pending_journal_confirmations = {}
 
 class ChatRequest(BaseModel):
     question: str
@@ -120,8 +132,16 @@ Flag it as "alert_response", and connect it to the recent alert.
 ──────────────────────────────────────────────
 5. 🧠 QUESTION HANDLING:
 If the user asks a question:
-- If it relates to their own data (my steps, my sleep, yesterday, today), it’s a "mongo_query".
-- If it's general (e.g., "What is a healthy heart rate?"), it’s a "knowledge_query".
+
+- If it relates to their own data (e.g., "What was my heart rate yesterday?", "What is the summary of my journal today?"), it’s a "mongo_query".
+- If it's general health advice (e.g., "What is a healthy heart rate?"), it’s a "knowledge_query".
+- If the user asks for a **summary of their journal entries**, respond with a formatted and human-friendly summary using the provided journal content.
+  Example format:
+  {
+    "reply": "📝 **Today's Journal Summary**:\n• Food: eggs and toast\n• Sleep: 7.5 hours\n• Mood: relaxed",
+    "intent": "mongo_query",
+    "collection": "journals_collection"
+  }
 
 ──────────────────────────────────────────────
 6. 💬 RESPONSE STYLE:
@@ -149,7 +169,7 @@ def detect_collection_from_query(query: str) -> str:
 
     collection_keywords = {
         "health_data_collection": ["steps", "heart rate", "sleep", "calories", "spo2", "oxygen", "activity"],
-        "journals_collection": ["journal", "mood", "reflection", "dream", "note", "food", "meditation", "entry", "log"],
+        "journals_collection": ["journal", "mood", "reflection", "dream", "note", "food", "meditation", "entry", "log",""],
         "alert_collection": ["alert", "abnormal", "warning", "trigger", "anomaly"],
         "notifications": ["notification", "reminder", "ping", "unread", "messages"],
         "tasks": ["task", "todo", "checklist", "pending", "completed", "due"],
@@ -167,12 +187,6 @@ def detect_collection_from_query(query: str) -> str:
 
 
 
-# Initialize once globally
-hf_embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2",
-    model_kwargs={'device': 'cpu'},
-    encode_kwargs={'normalize_embeddings': True}
-)
 
 def embed(text: str) -> np.ndarray:
     return np.array(hf_embeddings.embed_query(text))
@@ -203,12 +217,47 @@ def choose_relevant_reply(raw_reply: str, context_reply: str, question: str) -> 
 
 
 def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
+
     convo_object_id = get_or_create_conversation(request.conversation_id, username)
     convo_id = str(convo_object_id)
-    save_message(convo_id, "user", request.question)
     history = conversation_store.get(convo_id, [])
 
-    # Step 1: Ask LLM to classify the message
+    # ✅ Check if user is replying to a pending journal confirmation
+    if convo_id in pending_journal_confirmations:
+        user_reply = request.question.strip().lower()
+        journal = pending_journal_confirmations.pop(convo_id)
+
+        if user_reply in ["yes", "yeah", "yup", "ok", "sure"]:
+            journals_collection.insert_one({
+                "username": username,
+                "tag": journal["tag"],
+                "text": journal["text"],
+                "timestamp": datetime.utcnow(),
+                "conversation_id": convo_id
+            })
+            reply = apply_personality(f"✅ Got it! Your '{journal['tag']}' entry has been saved to today's journal.", "friendly")
+        else:
+            reply = apply_personality("Okay, I won’t save it. Let me know if you want to record anything else.", "friendly")
+
+        save_message(convo_id, "user", request.question)
+        save_message(convo_id, "assistant", reply)
+
+        history.append({"role": "user", "content": request.question})
+        history.append({"role": "assistant", "content": reply})
+        conversation_store[convo_id] = history[-10:]
+
+        return ChatResponse(
+            reply=reply,
+            history=conversation_store[convo_id],
+            conversation_id=convo_id,
+            query_type="journal_entry",
+            data_sources=[]
+        )
+
+    # 💬 Save initial user message
+    save_message(convo_id, "user", request.question)
+
+    # Step 1: LLM classification
     response = client.chat.completions.create(
         model=os.getenv("OPENAI_API_MODEL", "gpt-4"),
         messages=[
@@ -217,10 +266,9 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         ],
         temperature=0.5
     )
-
     raw_llm_reply = response.choices[0].message.content.strip()
 
-    # Step 2: Parse LLM reply
+    # Step 2: Parse response
     cleaned_reply = re.sub(r"^```(?:json)?|```$", "", raw_llm_reply.strip(), flags=re.MULTILINE).strip()
     try:
         parsed = json.loads(cleaned_reply)
@@ -234,10 +282,36 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         tag = None
         collection = None
 
-    context_reply = None  # reply generated from mongo/knowledge base
+    context_reply = None
 
-    # Step 3: Handle mongo_query
-    if intent == "mongo_query":
+    # ✅ Step 3: Journal entry — ask for save confirmation
+    if intent == "journal_entry":
+        pending_journal_confirmations[convo_id] = {
+            "username": username,
+            "tag": tag,
+            "text": request.question
+        }
+
+        final_reply = apply_personality(
+            f"Would you like me to save this as a '{tag}' journal entry for today? Just say 'yes' or 'no'.",
+            "friendly"
+        )
+
+        save_message(convo_id, "assistant", final_reply)
+        history.append({"role": "user", "content": request.question})
+        history.append({"role": "assistant", "content": final_reply})
+        conversation_store[convo_id] = history[-10:]
+
+        return ChatResponse(
+            reply=final_reply,
+            history=conversation_store[convo_id],
+            conversation_id=convo_id,
+            query_type=intent,
+            data_sources=[tag] if tag else []
+        )
+
+    # Step 4: Handle mongo_query
+    elif intent == "mongo_query":
         context_info = {
             "date": request.date,
             "start_date": request.start_date,
@@ -271,7 +345,8 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
 
         # save_message(convo_id, "assistant", context_reply)
 
-    # Step 4: Handle knowledge_query
+
+    # Step 5: Handle knowledge_query
     elif intent == "knowledge_query":
         kb_context = []
         print("🔄 Searching knowledge base...")
@@ -293,12 +368,20 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         except Exception as e:
             print(f"❌ Knowledge base error: {e}")
 
-    # Step 5: Decide which reply to use
-    final_reply = choose_relevant_reply(
-    apply_personality(raw_reply, "friendly"),
-    context_reply,
-    request.question
-     )
+    # Step 6: Decide which reply to use
+    if intent == "mongo_query" and context_reply:
+        final_reply = context_reply
+    else:
+        final_reply = choose_relevant_reply(
+            apply_personality(raw_reply, "friendly"),
+            context_reply,
+            request.question
+        )
+    # final_reply = choose_relevant_reply(
+    # apply_personality(raw_reply, "friendly"),
+    # context_reply,
+    # request.question
+    #  )
 
     # Step 6: Store to history
     history.append({"role": "user", "content": request.question})
