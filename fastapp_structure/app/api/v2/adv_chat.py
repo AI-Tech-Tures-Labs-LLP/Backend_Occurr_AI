@@ -635,7 +635,7 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
 
             # Use your LLM wrapper or direct call to DeepSeek/GPT
             ai_summary = apply_personality(prompt, "friendly")
-            context.append(f"📝 **AI Journal Summary**:\n{ai_summary}")
+            context.append(f"📝 **Journal Summary**:\n{ai_summary}")
 
 
 
