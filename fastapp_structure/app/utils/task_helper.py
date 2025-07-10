@@ -257,7 +257,21 @@ def check_and_notify_pending_tasks_for_all_users():
         })
 
         for task in pending_tasks:
-            message = f"Don’t forget to log your {task.get('metadata', {}).get('meal', 'task')}!"
+            task_type = task.get("type")
+            meal = task.get("metadata", {}).get("meal")
+
+            if task_type == "meal" and meal:
+                message = f"🍽️ Don’t forget to log your {meal}!"
+            elif task_type == "meditation":
+                message = "🧘 Time for your daily meditation. Take a moment to breathe."
+            elif task_type == "exercise":
+                message = "🏋️ Ready to log your workout? Let’s move!"
+            elif task_type == "breathing":
+                message = "🌬️ Don’t forget your breathing exercise session."
+            elif task_type == "reflection":
+                message = "📝 Reflect on your day before bed. Want to jot something down?"
+            else:
+                message = "⏰ Reminder: You have a pending task to complete."
 
             send_push_notification(
                 username=task["username"],

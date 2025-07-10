@@ -7,6 +7,8 @@ from app.utils.task_helper import generate_daily_tasks_from_profile
 from app.db.database import users_collection
 from jose import jwt, JWTError
 from fastapi.security import OAuth2PasswordBearer
+import re
+import dns.resolver
 from fastapi import Form
 
 from app.db.database import users_collection
@@ -57,6 +59,16 @@ class UserLogin(BaseModel):
     password: str
 
 
+
+
+
+def domain_exists(domain: str) -> bool:
+    try:
+        dns.resolver.resolve(domain, 'MX')
+        return True
+    except Exception:
+        return False
+
 # # oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 # class UserRegister(BaseModel):
 #     username: str
@@ -105,8 +117,26 @@ def decode_token(token: str):
 
 @router.post("/register")
 def register(user: UserRegister):
+    
+
+    def is_valid_email_format(email: str) -> bool:
+        pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+        return re.match(pattern, email) is not None
+
+    if not is_valid_email_format(user.email):
+        raise HTTPException(status_code=400, detail="Invalid email format")
+
+    # Extract domain and check if it exists
+    domain = user.email.split("@")[-1].lower()
+    if not domain_exists(domain):
+        raise HTTPException(status_code=400, detail="Email domain does not exist")
+
+    # Username or email already taken
     if users_collection.find_one({"username": user.username}):
         raise HTTPException(status_code=400, detail="Username already exists")
+    
+    if users_collection.find_one({"email": user.email}):
+        raise HTTPException(status_code=400, detail="Email already registered")
     
     hashed = bcrypt.hash(user.password)
     user_doc = {
