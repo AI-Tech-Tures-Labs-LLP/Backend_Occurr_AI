@@ -19,6 +19,7 @@ class UserRegister(BaseModel):
     email: EmailStr
     age: Optional[int] = Field(default=None, ge=0)
     gender: Optional[str] = Field(default=None, pattern="^(male|female|other)$")
+    date_of_birth: Optional[datetime] = None
     height_cm: Optional[int] = Field(default=None, ge=0)
     weight_kg: Optional[int] = Field(default=None, ge=0)
     profession: Optional[str] = None
@@ -34,6 +35,7 @@ class UserLogin(BaseModel):
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     age: Optional[int] = Field(default=None, ge=0)
+    date_of_birth: Optional[datetime] = None
     gender: Optional[str] = Field(default=None, pattern="^(male|female|other)$")
     height_cm: Optional[int] = Field(default=None, ge=0)
     weight_kg: Optional[int] = Field(default=None, ge=0)
@@ -64,19 +66,14 @@ def register(user: UserRegister):
         "username": user.username,
         "password": hashed,
         "email": user.email,
+        "date_of_birth":user.date_of_birth,
         "age": user.age,
         "gender": user.gender,
         "created_at": datetime.utcnow()
     })
     return {"message": "User registered successfully"}
 
-# @router.post("/login")
-# def login(user: UserLogin):
-#     record = users_collection.find_one({"username": user.username})
-#     if not record or not bcrypt.verify(user.password, record["password"]):
-#         raise HTTPException(status_code=401, detail="Invalid credentials")
-#     token = generate_token(user.username)
-#     return {"access_token": token, "token_type": "bearer"}
+
 @router.post("/token")
 def login_for_access_token(username: str = Form(...), password: str = Form(...)):
     record = users_collection.find_one({"username": username})
