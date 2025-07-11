@@ -640,14 +640,25 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
 
 
     # Notifications analysis
-    if data.get("user_notifications"):
+
+    # if data.get("user_notifications"):
+    if "user_notifications" in data and isinstance(data["user_notifications"], list):
+
         unread = [n for n in data["user_notifications"] if not n.get("read", True)]
         if unread:
             summary = [
-                f"{n['timestamp'].strftime('%Y-%m-%d') if isinstance(n['timestamp'], datetime) else str(n['timestamp'])[:10]} - {n['message']}"
+                f"{n.get('timestamp').strftime('%Y-%m-%d') if isinstance(n.get('timestamp'), datetime) else str(n.get('timestamp'))[:10]} - {n.get('body', '[No message]')}"
                 for n in unread[:5]
             ]
             context.append("🔔 **Unread Notifications**:\n" + "\n".join(summary))
+    # if data.get("user_notifications"):
+    #     unread = [n for n in data["user_notifications"] if not n.get("read", True)]
+    #     if unread:
+    #         summary = [
+    #             f"{n['timestamp'].strftime('%Y-%m-%d') if isinstance(n['timestamp'], datetime) else str(n['timestamp'])[:10]} - {n['message']}"
+    #             for n in unread[:5]
+    #         ]
+    #         context.append("🔔 **Unread Notifications**:\n" + "\n".join(summary))
     
     return "\n\n".join(context) if context else "No recent data available for your query."
 
@@ -884,48 +895,6 @@ def ask_chatbot(req: ChatRequest, token: str = Depends(oauth2_scheme)):
 
     # STEP 4: Gather knowledge base context if needed
     kb_context = []
-    # if "knowledge_base" in data_sources:
-    #     print("📚 Gathering knowledge base context...")
-    #     kb_context = gather_kb_context(query)
-    #     print(f"📖 Found {len(kb_context)} KB documents")
-
-    # if "knowledge_base" in data_sources:
-    #     print("🔄 Searching knowledge base...")
-    #     try:
-    #         for index_name in os.listdir(FAISS_FOLDER_PATH):
-    #             index_name_clean = index_name.strip()
-    #             index_path = os.path.join(FAISS_FOLDER_PATH, index_name_clean)
-    #             print(f"🔍 Checking index: {index_path}")
-
-    #             # Skip if not a directory or missing files
-    #             if not os.path.isdir(index_path):
-    #                 continue
-
-    #             faiss_file = os.path.join(index_path, "index.faiss")
-    #             pkl_file = os.path.join(index_path, "index.pkl")
-
-    #             if not (os.path.exists(faiss_file) and os.path.exists(pkl_file)):
-    #                 print(f"⚠️ Skipping {index_name_clean} — Missing index files.")
-    #                 continue
-
-    #             # if index_name_clean.lower() == "gita":
-    #             #     continue
-
-    #             print(f"🔍 Querying FAISS index: {index_name_clean}")  # <-- this line
-
-    #             # Use helper function to query the index
-    #             kb_snippets = query_documents(query, index_path)
-    #             if kb_snippets:
-    #                 print(f"✅ Retrieved {len(kb_snippets)} snippets from {index_name_clean}")
-    #                 kb_context.extend(kb_snippets)
-
-    #         print(f"📚 Total knowledge snippets: {len(kb_context)}")
-
-        # except Exception as e:
-        #     print(f"❌ Knowledge base search failed: {e}")
-
-
-
     if "knowledge_base" in data_sources:
         print("🔄 Searching knowledge base...")
         try:

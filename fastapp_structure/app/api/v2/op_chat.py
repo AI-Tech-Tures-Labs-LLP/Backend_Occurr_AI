@@ -335,13 +335,24 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         print(f"📦 MongoDB Results:\n{json.dumps(personal_data, indent=2, default=str)}")
 
         personal_context = build_comprehensive_context(personal_data, username)
-        if personal_context and "No recent data" not in personal_context:
+        print("Personal_Context:", personal_context)
+        # if personal_context.strip() != "No recent data available for your query.":
+        if personal_context and personal_context.strip() != "No recent data available for your query.":
+
             context_reply = apply_personality(personal_context, "friendly")
         else:
             context_reply = apply_personality(
                 "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
                 "friendly"
-            )
+        )
+
+        # if personal_context and "No recent data" not in personal_context:
+        #     context_reply = apply_personality(personal_context, "friendly")
+        # else:
+        #     context_reply = apply_personality(
+        #         "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
+        #         "friendly"
+        #     )
 
         # save_message(convo_id, "assistant", context_reply)
 
