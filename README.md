@@ -52,6 +52,7 @@ main.py # FastAPI app entry point
 
 ### 1. Clone and run the 
 ##Auto-setup script
+ 
  python setup_and_run.py
 
 ##Manually steup
