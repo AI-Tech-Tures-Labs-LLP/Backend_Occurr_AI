@@ -502,7 +502,7 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
     print("📚 History:", conversation_store[convo_id])
 
     
-    save_message(convo_id, "assistant", context_reply)
+    save_message(convo_id, "assistant", final_reply)
     
 
     # Step 7: Return response
