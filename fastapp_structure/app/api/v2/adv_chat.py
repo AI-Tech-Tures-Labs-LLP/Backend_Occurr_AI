@@ -623,19 +623,42 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
 
     #     context.append("\n".join(summary_lines))
     
-    if data["journal"]:
-        journal_texts = [entry.get("text", "") for entry in data["journal"] if entry.get("text")]
+    # 
+    if data.get("journal"):
+        tag_map = {
+            "food_intake": "Food",
+            "sleep": "Sleep",
+            "mood": "Mood",
+            "meditation": "Meditation",
+            "personal": "Personal Note",
+            "work_or_study": "Work/Study",
+            "extra_note": "Note"
+        }
 
-        if journal_texts:
-            prompt = (
-                "Summarize the following journal entries into a short and friendly summary. "
-                "Group similar thoughts (food, sleep, mood, etc), and highlight anything important:\n\n"
-                + "\n".join(f"- {text}" for text in journal_texts)
-            )
+        tag_summary = {}
 
-            # Use your LLM wrapper or direct call to DeepSeek/GPT
-            ai_summary = apply_personality(prompt, "friendly")
-            context.append(f"📝 **Journal Summary**:\n{ai_summary}")
+        for entry in data["journal"]:
+            # Handle both formats
+            if "tag" in entry and "text" in entry:
+                tag = entry.get("tag", "unknown")
+                text = entry.get("text", "")
+            else:
+                # Flat key-value fallback
+                possible_tag = next((key for key in entry if key in tag_map), None)
+                if not possible_tag:
+                    continue  # skip unrecognized structure
+                tag = possible_tag
+                text = entry.get(tag, "")
+
+            readable = tag_map.get(tag, tag.replace("_", " ").title())
+            tag_summary.setdefault(readable, []).append(text)
+
+        if tag_summary:
+            summary_lines = ["📝 **Journal Summary**:"]
+            for tag, notes in tag_summary.items():
+                summary_lines.append(f"• {tag}: {' | '.join(notes)}")
+            context.append("\n".join(summary_lines))
+
 
 
 

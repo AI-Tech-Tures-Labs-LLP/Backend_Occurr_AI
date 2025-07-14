@@ -55,9 +55,15 @@ loaded_indexes = {}
 # In-memory store to track pending journal confirmations
 pending_journal_confirmations = {}
 
+
+class TagTimeRange(BaseModel):
+    tag: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
 class ChatRequest(BaseModel):
     question: str
-    tags: Optional[List[str]] = None
+    tags: Optional[List[TagTimeRange]] = None
     context: Optional[str] = None
     date: Optional[str] = None
     start_date: Optional[str] = None
@@ -72,6 +78,30 @@ class ChatResponse(BaseModel):
     data_sources: List[str]
 
 conversation_store = {}
+
+
+
+TAG_COLLECTION_MAP = {
+    "heart_rate": "health_data_collection",
+    "steps": "health_data_collection",
+    "sleep": "health_data_collection",
+    "spo2": "health_data_collection",
+    "calories": "health_data_collection",
+    "food_intake": "journals_collection",
+    "meditation": "journals_collection",
+    "work_or_study": "journals_collection",
+    "personal": "journals_collection",
+    "mood": "journals_collection",
+    "extra_note": "journals_collection",
+    "alert": "alert_collection",
+    "notification": "notifications_collection",
+    "reflection": "journals_collection",
+    "breathing":"breathing_collection",
+    "task":"task_collection"
+}
+
+
+
 
 DEFAULT_SYSTEM_PROMPT = """
 You are an intelligent health and lifestyle assistant.
@@ -285,66 +315,133 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
     context_reply = None
 
     # ✅ Step 3: Journal entry — ask for save confirmation
-    if intent == "journal_entry":
-        pending_journal_confirmations[convo_id] = {
-            "username": username,
-            "tag": tag,
-            "text": request.question
-        }
+    if intent == "mongo_query":
+        context_reply = None
+        used_sources = []
 
-        final_reply = apply_personality(
-            f"Would you like me to save this as a '{tag}' journal entry for today? Just say 'yes' or 'no'.",
-            "friendly"
-        )
+        if request.tags:
+            all_contexts = []
 
-        save_message(convo_id, "assistant", final_reply)
-        history.append({"role": "user", "content": request.question})
-        history.append({"role": "assistant", "content": final_reply})
-        conversation_store[convo_id] = history[-10:]
+            for tag_obj in request.tags:
+                tag = tag_obj.tag
+                collection = TAG_COLLECTION_MAP.get(tag)
+                if not collection:
+                    continue
 
-        return ChatResponse(
-            reply=final_reply,
-            history=conversation_store[convo_id],
-            conversation_id=convo_id,
-            query_type=intent,
-            data_sources=[tag] if tag else []
-        )
+                context_info = {
+                    "start_date": tag_obj.start_date,
+                    "end_date": tag_obj.end_date,
+                    "collection": collection,
+                    "conversation_id": convo_id
+                }
 
-    # Step 4: Handle mongo_query
-    elif intent == "mongo_query":
-        context_info = {
-            "date": request.date,
-            "start_date": request.start_date,
-            "end_date": request.end_date,
-            "conversation_id": convo_id
-        }
+                mongo_query = generate_ai_mongo_query_with_fallback(tag, username, context_info)
+                personal_data = fetch_personal_data(mongo_query, username)
+                summary = build_comprehensive_context(personal_data, username)
 
-        if not request.start_date and not request.end_date:
-            context_info.update(extract_date_context(request.question))
+                if summary and "No recent data" not in summary:
+                    all_contexts.append(f"🗂️ **{tag.title()} Summary:**\n{summary}")
+                    used_sources.append(tag)
 
-        if not collection:
-            collection = detect_collection_from_query(request.question)
+            if all_contexts:
+                context_reply = apply_personality("\n\n".join(all_contexts), "friendly")
 
-        print("🔍 Processing MongoDB query with context:", context_info)
-        context_info["collection"] = collection
-
-        mongo_query = generate_ai_mongo_query_with_fallback(request.question, username, context_info)
-        print(f"🧠 AI Mongo Query:\n{json.dumps(mongo_query, indent=2)}")
-
-        personal_data = fetch_personal_data(mongo_query, username)
-        print(f"📦 MongoDB Results:\n{json.dumps(personal_data, indent=2, default=str)}")
-
-        personal_context = build_comprehensive_context(personal_data, username)
-        print("Personal_Context:", personal_context)
-        # if personal_context.strip() != "No recent data available for your query.":
-        if personal_context and personal_context.strip() != "No recent data available for your query.":
-
-            context_reply = apply_personality(personal_context, "friendly")
         else:
-            context_reply = apply_personality(
-                "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
-                "friendly"
-        )
+            # Fallback: regular single query path
+            context_info = {
+                "date": request.date,
+                "start_date": request.start_date,
+                "end_date": request.end_date,
+                "conversation_id": convo_id
+            }
+
+            if not request.start_date and not request.end_date:
+                context_info.update(extract_date_context(request.question))
+
+            collection = detect_collection_from_query(request.question)
+            context_info["collection"] = collection
+
+            print("🔍 Processing MongoDB query with context:", context_info)
+
+            mongo_query = generate_ai_mongo_query_with_fallback(request.question, username, context_info)
+            print(f"🧠 AI Mongo Query:\n{json.dumps(mongo_query, indent=2)}")
+
+            personal_data = fetch_personal_data(mongo_query, username)
+            print(f"📦 MongoDB Results:\n{json.dumps(personal_data, indent=2, default=str)}")
+
+            personal_context = build_comprehensive_context(personal_data, username)
+            print("Personal_Context:", personal_context)
+
+            if personal_context and personal_context.strip() != "No recent data available for your query.":
+                context_reply = apply_personality(personal_context, "friendly")
+            else:
+                context_reply = apply_personality(
+                    "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
+                    "friendly"
+                )
+
+    # if intent == "journal_entry":
+    #     pending_journal_confirmations[convo_id] = {
+    #         "username": username,
+    #         "tag": tag,
+    #         "text": request.question
+    #     }
+
+    #     final_reply = apply_personality(
+    #         f"Would you like me to save this as a '{tag}' journal entry for today? Just say 'yes' or 'no'.",
+    #         "friendly"
+    #     )
+
+    #     save_message(convo_id, "assistant", final_reply)
+    #     history.append({"role": "user", "content": request.question})
+    #     history.append({"role": "assistant", "content": final_reply})
+    #     conversation_store[convo_id] = history[-10:]
+
+    #     return ChatResponse(
+    #         reply=final_reply,
+    #         history=conversation_store[convo_id],
+    #         conversation_id=convo_id,
+    #         query_type=intent,
+    #         data_sources=[tag] if tag else []
+    #     )
+
+    # # Step 4: Handle mongo_query
+    # elif intent == "mongo_query":
+    #     context_info = {
+    #         "date": request.date,
+    #         "start_date": request.start_date,
+    #         "end_date": request.end_date,
+    #         "conversation_id": convo_id
+    #     }
+
+        
+
+    #     if not request.start_date and not request.end_date:
+    #         context_info.update(extract_date_context(request.question))
+
+    #     if not collection:
+    #         collection = detect_collection_from_query(request.question)
+
+    #     print("🔍 Processing MongoDB query with context:", context_info)
+    #     context_info["collection"] = collection
+
+    #     mongo_query = generate_ai_mongo_query_with_fallback(request.question, username, context_info)
+    #     print(f"🧠 AI Mongo Query:\n{json.dumps(mongo_query, indent=2)}")
+
+    #     personal_data = fetch_personal_data(mongo_query, username)
+    #     print(f"📦 MongoDB Results:\n{json.dumps(personal_data, indent=2, default=str)}")
+
+    #     personal_context = build_comprehensive_context(personal_data, username)
+    #     print("Personal_Context:", personal_context)
+    #     # if personal_context.strip() != "No recent data available for your query.":
+    #     if personal_context and personal_context.strip() != "No recent data available for your query.":
+
+    #         context_reply = apply_personality(personal_context, "friendly")
+    #     else:
+    #         context_reply = apply_personality(
+    #             "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
+    #             "friendly"
+    #     )
 
         # if personal_context and "No recent data" not in personal_context:
         #     context_reply = apply_personality(personal_context, "friendly")
