@@ -503,12 +503,13 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
 
     
     save_message(convo_id, "assistant", final_reply)
+    recent = get_recent_history(convo_id)
     
 
     # Step 7: Return response
     return ChatResponse(
         reply=final_reply,
-        history=conversation_store[convo_id],
+        history=recent['history'],
         conversation_id=convo_id,
         query_type=intent,
         data_sources=[tag] if tag else []

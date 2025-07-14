@@ -836,14 +836,29 @@ def save_message(convo_id, role: str, content: str):
         }
     )
 
-def get_recent_history(convo_id, limit: int = 6):
-    """Get recent conversation history"""
-    convo = conversations_collection.find_one({"_id": convo_id})
-    return {
-        "_id": str(convo_id), 
-        "history": convo.get("history", [])[-limit:] if convo else []
-    }
+# def get_recent_history(convo_id, limit: int = 6):
+#     """Get recent conversation history"""
+#     convo = conversations_collection.find_one({"_id": convo_id})
+#     return {
+#         "_id": str(convo_id), 
+#         "history": convo.get("history", [])[-limit:] if convo else []
+#     }
+def get_recent_history(convo_id: str, limit: int = 6):
+    """Safely fetch recent conversation history by ObjectId"""
+    try:
+        obj_id = ObjectId(convo_id)
+    except Exception:
+        return {"_id": convo_id, "history": []}
 
+    convo = conversations_collection.find_one({"_id": obj_id})
+    if not convo:
+        return {"_id": convo_id, "history": []}
+
+    history = convo.get("history", [])
+    return {
+        "_id": str(obj_id),
+        "history": history[-limit:]  # last N entries
+    }
 # ============================================================================
 # MAIN API ENDPOINT
 # ============================================================================
