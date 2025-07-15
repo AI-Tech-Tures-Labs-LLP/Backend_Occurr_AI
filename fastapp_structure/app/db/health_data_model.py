@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from app.utils.prompt_rule import PROMPT_TRIGGER_RULES
 from app.db.database import MONGO_URL, users_collection
 from app.db.notification_model import save_notification,notifications_collection
+from app.utils.task_helper import send_push_notification
 
 
 client = MongoClient(MONGO_URL)
@@ -79,14 +80,24 @@ def create_health_alert(username, metric, value, timestamp):
         "created_at": datetime.utcnow().replace(tzinfo=timezone.utc)
     })
 
-    notifications_collection.insert_one({
-        "username": username,
-        "title": f"Health Alert: {metric.capitalize()}",
-        "body": prompt,
-        "read": False,
-        "timestamp": datetime.utcnow().replace(tzinfo=timezone.utc),
-        "alert_id": str(alert_collection.inserted_id)
-    })
+    # notifications_collection.insert_one({
+    #     "username": username,
+    #     "title": f"Health Alert: {metric.capitalize()}",
+    #     "body": prompt,
+    #     "read": False,
+    #     "timestamp": datetime.utcnow().replace(tzinfo=timezone.utc),
+    #     "alert_id": str(alert_collection.inserted_id)
+    # })
+
+    send_push_notification(
+        username = username,
+        title= f"Health Alert: {metric.capitalize()}",
+        body = prompt,
+        read = False,
+        # timestamp =datetime.utcnow().replace(tzinfo=timezone.utc),
+        alert_id = str(alert_collection.inserted_id)
+    )
+
 
 
 

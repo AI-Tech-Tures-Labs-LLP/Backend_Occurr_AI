@@ -4,7 +4,7 @@ from app.db.journal_model import journals_collection, get_or_create_daily_journa
 from app.db.notification_model import notifications_collection, save_notification
 from datetime import datetime, timedelta
 from bson import ObjectId
-
+from app.utils.firebase_push import send_push_notification_v1 
 from app.db.breathing_exercise import breathing_collection
 from openai import OpenAI
 import os
@@ -287,18 +287,48 @@ def check_and_notify_pending_tasks_for_all_users():
 
 
 # Send push notification to user and save notification record
+# def send_push_notification(username: str, title: str, body: str, task_id=None, alert_id=None):
+#     user = users_collection.find_one({"username": username}, {"device_token": 1})
+
+#     # Try to send push
+#     if user and "device_token" in user:
+#         token = user["device_token"]
+#         print(f"📲 Sending push notification to {username}: {title} — {body}")
+#         # TODO: Add real FCM/Expo integration here
+#     else:
+#         print(f"⚠️ No device token found for user {username}. Skipping push.")
+
+#     # Always save the notification
+#     save_notification(
+#         username=username,
+#         title=title,
+#         body=body,
+#         read=False,
+#         task_id=task_id,
+#         alert_id=alert_id
+#     )
+
+
 def send_push_notification(username: str, title: str, body: str, task_id=None, alert_id=None):
     user = users_collection.find_one({"username": username}, {"device_token": 1})
 
-    # Try to send push
     if user and "device_token" in user:
         token = user["device_token"]
         print(f"📲 Sending push notification to {username}: {title} — {body}")
-        # TODO: Add real FCM/Expo integration here
+
+        try:
+            send_push_notification_v1(
+                token=token,
+                title=title,
+                body=body,
+                screen="HomeScreen" if alert_id else "TaskScreen"
+            )
+        except Exception as e:
+            print(f"❌ Failed to send push to {username}: {e}")
     else:
         print(f"⚠️ No device token found for user {username}. Skipping push.")
 
-    # Always save the notification
+    # ✅ Always save the notification in DB
     save_notification(
         username=username,
         title=title,
@@ -307,6 +337,7 @@ def send_push_notification(username: str, title: str, body: str, task_id=None, a
         task_id=task_id,
         alert_id=alert_id
     )
+
 
 
 def get_or_create_daily_journal(username: str):

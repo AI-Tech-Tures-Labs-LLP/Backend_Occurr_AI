@@ -1,5 +1,5 @@
 from pymongo import MongoClient
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta,timezone
 from bson import ObjectId
 
 from app.db.database import MONGO_URL, users_collection
@@ -20,7 +20,7 @@ def save_notification(username: str, title: str, body: str, read: bool, task_id:
         "title": title,
         "body": body,
         "read": False,  # Default to unread
-        "timestamp": datetime.utcnow()  # Timestamp when the notification is sent
+        "timestamp":datetime.utcnow().replace(tzinfo=timezone.utc), # Timestamp when the notification is sent
     }
     
     # Convert ObjectId to string if task_id or alert_id are provided

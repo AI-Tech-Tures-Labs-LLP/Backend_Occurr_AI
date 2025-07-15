@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi import Body
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime
@@ -221,3 +222,23 @@ def get_profile(token: str = Depends(oauth2_scheme)):
         user["_id"] = str(user["_id"])  # convert ObjectId to string
 
     return user
+
+
+@router.post("/register-device-token")
+def register_device_token(
+    device_token: str = Body(...),
+    token: str = Depends(oauth2_scheme)
+):
+    valid, username = decode_token(token)
+    if not valid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    result = users_collection.update_one(
+        {"username": username},
+        {"$set": {"device_token": device_token}}
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"message": "Device token saved"}
