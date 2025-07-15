@@ -210,6 +210,8 @@ __marimo__/
 
 # Firebase credentials
 app/secrets/firebase-service-account.json
+app/secrets/*.json
+
 
 # Optional: ignore all JSON secrets
 *.secret.json
