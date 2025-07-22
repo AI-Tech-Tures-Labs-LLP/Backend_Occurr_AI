@@ -90,7 +90,7 @@ def update_profile(update: UserUpdate, token: str = Depends(oauth2_scheme)):
 @router.get("/me")
 def get_profile(token: str = Depends(oauth2_scheme)):
     valid, username = decode_token(token)
-    if not valid:
+    if not valid: 
         raise HTTPException(status_code=401, detail=username)
 
     user = users_collection.find_one({"username": username}, {"password": 0})

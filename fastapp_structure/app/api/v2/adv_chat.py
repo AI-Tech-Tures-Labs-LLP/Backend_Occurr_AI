@@ -1,6 +1,6 @@
 
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -1033,20 +1033,53 @@ def debug_chat_query(req: ChatRequest, token: str = Depends(oauth2_scheme)):
         "raw_results": personal_data
     }
 
-@router.get("/chat/history/", response_model=Dict[str, Any])
-def get_previous_conversation(token: str = Depends(oauth2_scheme), limit: int = 6) -> Dict[str, Any]:
+# @router.get("/chat/history/", response_model=Dict[str, Any])
+# def get_previous_conversation(token: str = Depends(oauth2_scheme), limit: int = 6,conversation_id=str) -> Dict[str, Any]:
+#     """Fetch the last 'limit' messages and the conversation ID from the user's history."""
+#     valid, username = decode_token(token)
+#     if not valid or not username:
+#         raise HTTPException(status_code=401, detail="Invalid token or user not found")
+
+#     conversation = conversations_collection.find_one({"username": username ,"_id":conversation_id})
+#     print(conversation)
+#     if conversation and "history" in conversation:
+#         return {
+#             "_id": str(conversation["_id"]),
+#             "history": conversation["history"][-limit:]
+#         }
+
+#     return {
+#         "_id": None,
+#         "history": []
+#     }
+
+@router.get("/chat/history/{conversation_id}", response_model=Dict[str, Any])
+def get_previous_conversation(
+    token: str = Depends(oauth2_scheme), 
+    limit: int = 6, 
+    conversation_id: str = Path(..., title="Conversation ID", description="The ID of the conversation to retrieve")
+) -> Dict[str, Any]:
     """Fetch the last 'limit' messages and the conversation ID from the user's history."""
+    
+    # Decode the token
     valid, username = decode_token(token)
     if not valid or not username:
         raise HTTPException(status_code=401, detail="Invalid token or user not found")
+    
+    try:
+        conversation_id_obj = ObjectId(conversation_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid conversation ID format")
 
-    conversation = conversations_collection.find_one({"username": username})
+    # Fetch conversation data from the collection
+    conversation = conversations_collection.find_one({"username": username, "_id": conversation_id_obj})
     if conversation and "history" in conversation:
         return {
             "_id": str(conversation["_id"]),
             "history": conversation["history"][-limit:]
         }
 
+    # Return empty result if no conversation is found
     return {
         "_id": None,
         "history": []
