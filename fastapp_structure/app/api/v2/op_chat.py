@@ -251,35 +251,64 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
     convo_object_id = get_or_create_conversation(request.conversation_id, username)
     convo_id = str(convo_object_id)
     history = conversation_store.get(convo_id, [])
-
-    # ✅ Check if user is replying to a pending journal confirmation
     if convo_id in pending_journal_confirmations:
         user_reply = request.question.strip().lower()
         journal = pending_journal_confirmations.pop(convo_id)
-
+    
         if user_reply in ["yes", "yeah", "yup", "ok", "sure"]:
-        # Check if journal already exists for today, same tag, same user
-            start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            end_of_day = datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)
-
+            now = datetime.utcnow()
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = start_of_day + timedelta(days=1)
+    
+            new_entry = {
+                "tag": journal["tag"],
+                "text": journal["text"],
+                "timestamp": now
+            }
+    
+            # Check if a journal already exists for today
             existing_journal = journals_collection.find_one({
                 "username": username,
-                "timestamp": {"$gte": start_of_day, "$lte": end_of_day}
+                "timestamp": {"$gte": start_of_day, "$lt": end_of_day}
             })
-
+    
             if existing_journal:
-                reply = apply_personality(f"ℹ️ You already have a '{journal['tag']}' journal entry for today. Skipped saving duplicate.", "friendly")
+                # Append new entry to existing journal
+                update_result = journals_collection.update_one(
+                    {"_id": existing_journal["_id"]},
+                    {
+                        "$push": {"entries": new_entry},
+                        "$set": {"last_modified": now}  # Track when last updated
+                    }
+                )
+                if update_result.modified_count > 0:
+                    reply = apply_personality(f"📝 Added a new '{journal['tag']}' entry to today's journal.", "friendly")
+                else:
+                    reply = apply_personality("⚠️ Tried updating your journal but nothing changed.", "friendly")
             else:
-                journals_collection.insert_one({
+                # Create a new journal document for the day
+                new_journal = {
                     "username": username,
-                    "tag": journal["tag"],
-                    "text": journal["text"],
-                    "timestamp": datetime.utcnow(),
+                    "entries": [new_entry],
+                    "timestamp": now,
+                    "last_modified": now,
                     "conversation_id": convo_id
-                })
-                reply = apply_personality(f"✅ Got it! Your '{journal['tag']}' entry has been saved to today's journal.", "friendly")
+                }
+                
+                try:
+                    insert_result = journals_collection.insert_one(new_journal)
+                    if insert_result.inserted_id:
+                        print("✅ Inserted journal ID:", insert_result.inserted_id)
+                        reply = apply_personality(f"✅ Got it! Your '{journal['tag']}' entry has been saved to today's journal.", "friendly")
+                    else:
+                        reply = apply_personality("⚠️ Something went wrong while saving your journal.", "friendly")
+                except Exception as e:
+                    print(f"❌ Error inserting journal: {e}")
+                    reply = apply_personality("⚠️ Something went wrong while saving your journal. Please try again.", "friendly")
         else:
-            reply = apply_personality("Okay, I won’t save it. Let me know if you want to record anything else.", "friendly")
+            reply = apply_personality("Okay, I won't save it. Let me know if you want to record anything else.", "friendly")
+
+        # Save messages and update history
         save_message(convo_id, "user", request.question)
         save_message(convo_id, "assistant", reply)
 
@@ -292,7 +321,7 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
             history=conversation_store[convo_id],
             conversation_id=convo_id,
             query_type="journal_entry",
-            data_sources=[]
+            data_sources=[journal["tag"]] if journal.get("tag") else []
         )
 
     # 💬 Save initial user message
@@ -325,8 +354,133 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
 
     context_reply = None
 
+    # ✅ Step 3: Handle journal entry - ask for save confirmation
+    if intent == "journal_entry":
+        if not tag:
+            # Fallback tag detection if LLM didn't provide one
+            tag = detect_journal_tag_from_text(request.question)
+        
+        pending_journal_confirmations[convo_id] = {
+            "username": username,
+            "tag": tag or "extra_note",  # Default fallback
+            "text": request.question
+        }
+
+        final_reply = apply_personality(
+            f"Would you like me to save this as a '{tag or 'note'}' journal entry for today? Just say 'yes' or 'no'.",
+            "friendly"
+        )
+
+        save_message(convo_id, "assistant", final_reply)
+        history.append({"role": "user", "content": request.question})
+        history.append({"role": "assistant", "content": final_reply})
+        conversation_store[convo_id] = history[-10:]
+
+        return ChatResponse(
+            reply=final_reply,
+            history=conversation_store[convo_id],
+            conversation_id=convo_id,
+            query_type=intent,
+            data_sources=[tag] if tag else []
+        )
+    
+    # if convo_id in pending_journal_confirmations:
+    #     user_reply = request.question.strip().lower()
+    #     journal = pending_journal_confirmations.pop(convo_id)
+    
+    #     if user_reply in ["yes", "yeah", "yup", "ok", "sure"]:
+    #         now = datetime.utcnow()
+    #         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    #         end_of_day = start_of_day + timedelta(days=1)
+    
+    #         new_entry = {
+    #             "tag": journal["tag"],
+    #             "text": journal["text"],
+    #             "timestamp": now  # timestamp per entry
+    #         }
+    
+    #         # Check if a journal already exists for today
+    #         existing_journal = journals_collection.find_one({
+    #             "username": username,
+    #             "timestamp": {"$gte": start_of_day, "$lt": end_of_day}
+    #         })
+    
+    #         if existing_journal:
+    #             # Append new entry to existing journal
+    #             update_result = journals_collection.update_one(
+    #                 {"_id": existing_journal["_id"]},
+    #                 {
+    #                     "$push": {"entries": new_entry} # Optional: update latest modified
+    #                 }
+    #             )
+    #             if update_result.modified_count:
+    #                 reply = apply_personality(f"📝 Added a new '{journal['tag']}' entry to today’s journal.", "friendly")
+    #             else:
+    #                 reply = apply_personality("⚠️ Tried updating your journal but nothing changed.", "friendly")
+    #         else:
+    #             # Create a new journal document for the day
+    #             insert_result = journals_collection.insert_one({
+    #                 "username": username,
+    #                 "entries": [new_entry],
+    #                 "timestamp": now,
+    #                 "conversation_id": convo_id
+    #             })
+    #             if insert_result.inserted_id:
+    #                 print("✅ Inserted journal ID:", insert_result.inserted_id)
+    #                 reply = apply_personality(f"✅ Got it! Your '{journal['tag']}' entry has been saved to today’s journal.", "friendly")
+    #             else:
+    #                 reply = apply_personality("⚠️ Something went wrong while saving your journal.", "friendly")
+    #     else:
+    #         reply = apply_personality("Okay, I won’t save it. Let me know if you want to record anything else.", "friendly")
+
+    # # ✅ Check if user is replying to a pending journal confirmation
+    #     save_message(convo_id, "user", request.question)
+    #     save_message(convo_id, "assistant", reply)
+
+    #     history.append({"role": "user", "content": request.question})
+    #     history.append({"role": "assistant", "content": reply})
+    #     conversation_store[convo_id] = history[-10:]
+
+    #     return ChatResponse(
+    #         reply=reply,
+    #         history=conversation_store[convo_id],
+    #         conversation_id=convo_id,
+    #         query_type="journal_entry",
+    #         data_sources=[]
+    #     )
+
+    # # 💬 Save initial user message
+    # save_message(convo_id, "user", request.question)
+
+    # # Step 1: LLM classification
+    # response = client.chat.completions.create(
+    #     model=os.getenv("OPENAI_API_MODEL", "gpt-4"),
+    #     messages=[
+    #         {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+    #         {"role": "user", "content": request.question}
+    #     ],
+    #     temperature=0.5
+    # )
+    # raw_llm_reply = response.choices[0].message.content.strip()
+
+    # # Step 2: Parse response
+    # cleaned_reply = re.sub(r"^```(?:json)?|```$", "", raw_llm_reply.strip(), flags=re.MULTILINE).strip()
+    # try:
+    #     parsed = json.loads(cleaned_reply)
+    #     raw_reply = parsed.get("reply", raw_llm_reply)
+    #     intent = parsed.get("intent", "unknown")
+    #     tag = parsed.get("tag")
+    #     collection = parsed.get("collection")
+    # except json.JSONDecodeError:
+    #     raw_reply = raw_llm_reply
+    #     intent = "unknown"
+    #     tag = None
+    #     collection = None
+
+    # context_reply = None
+
     # ✅ Step 3: Journal entry — ask for save confirmation
-    if intent == "mongo_query":
+    elif intent == "mongo_query":
         context_reply = None
         used_sources = []
 
@@ -525,6 +679,27 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         query_type=intent,
         data_sources=[tag] if tag else []
     )
+
+
+
+def detect_journal_tag_from_text(text: str) -> str:
+    """Fallback function to detect journal tag from text if LLM doesn't provide one"""
+    text_lower = text.lower()
+    
+    if any(word in text_lower for word in ["meditat", "mindful", "breathe", "zen"]):
+        return "meditation"
+    elif any(word in text_lower for word in ["ate", "food", "meal", "lunch", "dinner", "breakfast", "snack"]):
+        return "food_intake"
+    elif any(word in text_lower for word in ["sleep", "slept", "nap", "tired", "bed"]):
+        return "sleep"
+    elif any(word in text_lower for word in ["work", "study", "learn", "project", "meeting", "office"]):
+        return "work_or_study"
+    elif any(word in text_lower for word in ["feel", "mood", "happy", "sad", "angry", "anxious", "excited"]):
+        return "mood"
+    elif any(word in text_lower for word in ["reflect", "thought", "realize", "understand", "insight"]):
+        return "reflection"
+    else:
+        return "personal"
 
 
 @router.post("/chat", response_model=ChatResponse)

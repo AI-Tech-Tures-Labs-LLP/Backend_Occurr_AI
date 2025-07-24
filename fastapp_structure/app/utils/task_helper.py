@@ -20,8 +20,18 @@ def generate_daily_tasks_from_profile(user):
     schedule = user.get("schedule", {})
     task_templates = []
 
-    def dt_today_at(tstr):
-        t = datetime.strptime(tstr, "%H:%M").time()
+    # def dt_today_at(time_str):
+    #     t = datetime.strptime(time_str, "%H:%M").time()
+    #     return datetime.combine(today,t)
+
+    # def dt_end_of_day():
+    #     return datetime.combine(today, datetime.max.time())
+    def dt_today_at(time_str):
+        if not time_str:
+            # Handle the case when time_str is None (set a default time)
+            # For example, default to 09:00
+            time_str = "09:00"
+        t = datetime.strptime(time_str, "%H:%M").time()
         return datetime.combine(today, t)
 
     def dt_end_of_day():

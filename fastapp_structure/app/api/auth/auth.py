@@ -17,7 +17,7 @@ SECRET_KEY="9Y5OC9hyv1UeOZtFa37AvR79IEURxN42MiDWZoRCLsE"
 router = APIRouter()
 # oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/vi/token")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/auth/token")
-
+ 
 
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, Dict, Any
