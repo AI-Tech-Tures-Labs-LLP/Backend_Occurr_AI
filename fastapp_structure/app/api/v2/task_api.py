@@ -216,7 +216,6 @@ def get_task_streak(token: str = Depends(oauth2_scheme)):
     return {"streak": streak}
 
 
-
 @router.put("/task/complete_task")
 def complete_task_with_content(task_id: str, task_content: str, image_url: Optional[str] = None, token: str = Depends(oauth2_scheme)):
     valid, username = decode_token(token)

@@ -258,17 +258,28 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         journal = pending_journal_confirmations.pop(convo_id)
 
         if user_reply in ["yes", "yeah", "yup", "ok", "sure"]:
-            journals_collection.insert_one({
+        # Check if journal already exists for today, same tag, same user
+            start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)
+
+            existing_journal = journals_collection.find_one({
                 "username": username,
-                "tag": journal["tag"],
-                "text": journal["text"],
-                "timestamp": datetime.utcnow(),
-                "conversation_id": convo_id
+                "timestamp": {"$gte": start_of_day, "$lte": end_of_day}
             })
-            reply = apply_personality(f"✅ Got it! Your '{journal['tag']}' entry has been saved to today's journal.", "friendly")
+
+            if existing_journal:
+                reply = apply_personality(f"ℹ️ You already have a '{journal['tag']}' journal entry for today. Skipped saving duplicate.", "friendly")
+            else:
+                journals_collection.insert_one({
+                    "username": username,
+                    "tag": journal["tag"],
+                    "text": journal["text"],
+                    "timestamp": datetime.utcnow(),
+                    "conversation_id": convo_id
+                })
+                reply = apply_personality(f"✅ Got it! Your '{journal['tag']}' entry has been saved to today's journal.", "friendly")
         else:
             reply = apply_personality("Okay, I won’t save it. Let me know if you want to record anything else.", "friendly")
-
         save_message(convo_id, "user", request.question)
         save_message(convo_id, "assistant", reply)
 

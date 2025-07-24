@@ -19,10 +19,16 @@ from app.db.database import db
 from app.utils.task_helper import generate_daily_tasks_from_profile,check_and_notify_pending_tasks_for_all_users
 from app.utils.settings_secheduler import check_journal_times
 app = FastAPI(title="Smart Assistant API")
+subapp = FastAPI(title="try Sub Mount")
 
 
 
+@subapp.get("/sub")
+def read_root():
+    return {"message": "Hello from subapp"}
 
+
+app.mount("/subapp", subapp)
 
 scheduler = BackgroundScheduler()
 
