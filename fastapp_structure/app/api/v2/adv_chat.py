@@ -261,25 +261,79 @@ def convert_iso_dates_in_query(query_list: list) -> list:
     
     return processed_query
 
+# def generate_fallback_query(username: str, context: dict) -> Dict[str, Any]:
+#     """Generate a simple fallback query when AI generation fails"""
+    
+#     fallback_query = {
+#         "health_data": [],
+#         "journal": [],
+#         "alerts": [],
+#         "user_notifications": []
+#     }
+    
+#     # Basic match filter with username
+#     base_match = {"username": username}
+    
+#     # Add date range if provided
+#     if context.get('start_date') and context.get('end_date'):
+#         try:
+#             start_date = datetime.fromisoformat(context['start_date'].replace('Z', '+00:00'))
+#             end_date = datetime.fromisoformat(context['end_date'].replace('Z', '+00:00'))
+            
+#             date_filter = {
+#                 "timestamp": {
+#                     "$gte": start_date,
+#                     "$lt": end_date
+#                 }
+#             }
+#             base_match.update(date_filter)
+#         except ValueError:
+#             print("⚠️ Invalid date format in context, using basic query")
+    
+#     # Generate basic queries for each collection
+#     fallback_query["health_data"] = [{"$match": base_match}]
+#     fallback_query["journal"] = [{"$match": base_match}]
+#     fallback_query["alerts"] = [{"$match": base_match}]
+    
+#     return fallback_query
+
+
 def generate_fallback_query(username: str, context: dict) -> Dict[str, Any]:
     """Generate a simple fallback query when AI generation fails"""
-    
+
     fallback_query = {
         "health_data": [],
         "journal": [],
         "alerts": [],
         "user_notifications": []
     }
-    
+
     # Basic match filter with username
     base_match = {"username": username}
-    
-    # Add date range if provided
+
+    # ✅ 1. Prioritize date-only match
+    if context.get("date"):
+        date_expr_match = {
+            "username": username,
+            "$expr": {
+                "$eq": [
+                    { "$dateToString": { "format": "%Y-%m-%d", "date": "$timestamp" } },
+                    context["date"]
+                ]
+            }
+        }
+
+        fallback_query["health_data"] = [{"$match": date_expr_match}]
+        fallback_query["journal"] = [{"$match": date_expr_match}]
+        fallback_query["alerts"] = [{"$match": date_expr_match}]
+        return fallback_query
+
+    # 2. Range filter (used only if no specific `date` is present)
     if context.get('start_date') and context.get('end_date'):
         try:
             start_date = datetime.fromisoformat(context['start_date'].replace('Z', '+00:00'))
             end_date = datetime.fromisoformat(context['end_date'].replace('Z', '+00:00'))
-            
+
             date_filter = {
                 "timestamp": {
                     "$gte": start_date,
@@ -289,13 +343,13 @@ def generate_fallback_query(username: str, context: dict) -> Dict[str, Any]:
             base_match.update(date_filter)
         except ValueError:
             print("⚠️ Invalid date format in context, using basic query")
-    
-    # Generate basic queries for each collection
+
     fallback_query["health_data"] = [{"$match": base_match}]
     fallback_query["journal"] = [{"$match": base_match}]
     fallback_query["alerts"] = [{"$match": base_match}]
     
     return fallback_query
+
 
 def generate_ai_mongo_query(question: str, username: str, context: dict) -> Dict[str, Any]:
     """Generate MongoDB queries using AI with improved error handling"""
@@ -637,16 +691,22 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
 
         tag_summary = {}
 
-        for entry in data["journal"]:
-            # Handle both formats
+        # ✅ Flatten entries from each document
+        flattened_entries = []
+        for doc in data["journal"]:
+            if "entries" in doc and isinstance(doc["entries"], list):
+                flattened_entries.extend(doc["entries"])
+            else:
+                flattened_entries.append(doc)
+
+        for entry in flattened_entries:
             if "tag" in entry and "text" in entry:
                 tag = entry.get("tag", "unknown")
                 text = entry.get("text", "")
             else:
-                # Flat key-value fallback
                 possible_tag = next((key for key in entry if key in tag_map), None)
                 if not possible_tag:
-                    continue  # skip unrecognized structure
+                    continue
                 tag = possible_tag
                 text = entry.get(tag, "")
 
@@ -658,7 +718,6 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
             for tag, notes in tag_summary.items():
                 summary_lines.append(f"• {tag}: {' | '.join(notes)}")
             context.append("\n".join(summary_lines))
-
 
 
 

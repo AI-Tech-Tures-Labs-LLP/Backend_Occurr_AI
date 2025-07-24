@@ -137,6 +137,16 @@ Use the following guide to map questions to collections:
 
 Include this as:
 "collection": "<collection_name>"
+👉 For journal or health data queries that involve a specific **date only**, use this MongoDB date filter to **ignore time**:
+```json
+{
+  "$expr": {
+    "$eq": [
+      { "$dateToString": { "format": "%Y-%m-%d", "date": "$timestamp" } },
+      "2025-07-23"
+    ]
+  }
+}
 
 ──────────────────────────────────────────────
 3. 📓 JOURNAL ENTRY DETECTION:
@@ -383,102 +393,7 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
             query_type=intent,
             data_sources=[tag] if tag else []
         )
-    
-    # if convo_id in pending_journal_confirmations:
-    #     user_reply = request.question.strip().lower()
-    #     journal = pending_journal_confirmations.pop(convo_id)
-    
-    #     if user_reply in ["yes", "yeah", "yup", "ok", "sure"]:
-    #         now = datetime.utcnow()
-    #         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    #         end_of_day = start_of_day + timedelta(days=1)
-    
-    #         new_entry = {
-    #             "tag": journal["tag"],
-    #             "text": journal["text"],
-    #             "timestamp": now  # timestamp per entry
-    #         }
-    
-    #         # Check if a journal already exists for today
-    #         existing_journal = journals_collection.find_one({
-    #             "username": username,
-    #             "timestamp": {"$gte": start_of_day, "$lt": end_of_day}
-    #         })
-    
-    #         if existing_journal:
-    #             # Append new entry to existing journal
-    #             update_result = journals_collection.update_one(
-    #                 {"_id": existing_journal["_id"]},
-    #                 {
-    #                     "$push": {"entries": new_entry} # Optional: update latest modified
-    #                 }
-    #             )
-    #             if update_result.modified_count:
-    #                 reply = apply_personality(f"📝 Added a new '{journal['tag']}' entry to today’s journal.", "friendly")
-    #             else:
-    #                 reply = apply_personality("⚠️ Tried updating your journal but nothing changed.", "friendly")
-    #         else:
-    #             # Create a new journal document for the day
-    #             insert_result = journals_collection.insert_one({
-    #                 "username": username,
-    #                 "entries": [new_entry],
-    #                 "timestamp": now,
-    #                 "conversation_id": convo_id
-    #             })
-    #             if insert_result.inserted_id:
-    #                 print("✅ Inserted journal ID:", insert_result.inserted_id)
-    #                 reply = apply_personality(f"✅ Got it! Your '{journal['tag']}' entry has been saved to today’s journal.", "friendly")
-    #             else:
-    #                 reply = apply_personality("⚠️ Something went wrong while saving your journal.", "friendly")
-    #     else:
-    #         reply = apply_personality("Okay, I won’t save it. Let me know if you want to record anything else.", "friendly")
-
-    # # ✅ Check if user is replying to a pending journal confirmation
-    #     save_message(convo_id, "user", request.question)
-    #     save_message(convo_id, "assistant", reply)
-
-    #     history.append({"role": "user", "content": request.question})
-    #     history.append({"role": "assistant", "content": reply})
-    #     conversation_store[convo_id] = history[-10:]
-
-    #     return ChatResponse(
-    #         reply=reply,
-    #         history=conversation_store[convo_id],
-    #         conversation_id=convo_id,
-    #         query_type="journal_entry",
-    #         data_sources=[]
-    #     )
-
-    # # 💬 Save initial user message
-    # save_message(convo_id, "user", request.question)
-
-    # # Step 1: LLM classification
-    # response = client.chat.completions.create(
-    #     model=os.getenv("OPENAI_API_MODEL", "gpt-4"),
-    #     messages=[
-    #         {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
-    #         {"role": "user", "content": request.question}
-    #     ],
-    #     temperature=0.5
-    # )
-    # raw_llm_reply = response.choices[0].message.content.strip()
-
-    # # Step 2: Parse response
-    # cleaned_reply = re.sub(r"^```(?:json)?|```$", "", raw_llm_reply.strip(), flags=re.MULTILINE).strip()
-    # try:
-    #     parsed = json.loads(cleaned_reply)
-    #     raw_reply = parsed.get("reply", raw_llm_reply)
-    #     intent = parsed.get("intent", "unknown")
-    #     tag = parsed.get("tag")
-    #     collection = parsed.get("collection")
-    # except json.JSONDecodeError:
-    #     raw_reply = raw_llm_reply
-    #     intent = "unknown"
-    #     tag = None
-    #     collection = None
-
-    # context_reply = None
-
+ 
     # ✅ Step 3: Journal entry — ask for save confirmation
     elif intent == "mongo_query":
         context_reply = None
@@ -539,85 +454,12 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
 
             if personal_context and personal_context.strip() != "No recent data available for your query.":
                 context_reply = apply_personality(personal_context, "friendly")
+                print("context_reply",context_reply)
             else:
                 context_reply = apply_personality(
                     "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
                     "friendly"
                 )
-
-    # if intent == "journal_entry":
-    #     pending_journal_confirmations[convo_id] = {
-    #         "username": username,
-    #         "tag": tag,
-    #         "text": request.question
-    #     }
-
-    #     final_reply = apply_personality(
-    #         f"Would you like me to save this as a '{tag}' journal entry for today? Just say 'yes' or 'no'.",
-    #         "friendly"
-    #     )
-
-    #     save_message(convo_id, "assistant", final_reply)
-    #     history.append({"role": "user", "content": request.question})
-    #     history.append({"role": "assistant", "content": final_reply})
-    #     conversation_store[convo_id] = history[-10:]
-
-    #     return ChatResponse(
-    #         reply=final_reply,
-    #         history=conversation_store[convo_id],
-    #         conversation_id=convo_id,
-    #         query_type=intent,
-    #         data_sources=[tag] if tag else []
-    #     )
-
-    # # Step 4: Handle mongo_query
-    # elif intent == "mongo_query":
-    #     context_info = {
-    #         "date": request.date,
-    #         "start_date": request.start_date,
-    #         "end_date": request.end_date,
-    #         "conversation_id": convo_id
-    #     }
-
-        
-
-    #     if not request.start_date and not request.end_date:
-    #         context_info.update(extract_date_context(request.question))
-
-    #     if not collection:
-    #         collection = detect_collection_from_query(request.question)
-
-    #     print("🔍 Processing MongoDB query with context:", context_info)
-    #     context_info["collection"] = collection
-
-    #     mongo_query = generate_ai_mongo_query_with_fallback(request.question, username, context_info)
-    #     print(f"🧠 AI Mongo Query:\n{json.dumps(mongo_query, indent=2)}")
-
-    #     personal_data = fetch_personal_data(mongo_query, username)
-    #     print(f"📦 MongoDB Results:\n{json.dumps(personal_data, indent=2, default=str)}")
-
-    #     personal_context = build_comprehensive_context(personal_data, username)
-    #     print("Personal_Context:", personal_context)
-    #     # if personal_context.strip() != "No recent data available for your query.":
-    #     if personal_context and personal_context.strip() != "No recent data available for your query.":
-
-    #         context_reply = apply_personality(personal_context, "friendly")
-    #     else:
-    #         context_reply = apply_personality(
-    #             "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
-    #             "friendly"
-    #     )
-
-        # if personal_context and "No recent data" not in personal_context:
-        #     context_reply = apply_personality(personal_context, "friendly")
-        # else:
-        #     context_reply = apply_personality(
-        #         "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
-        #         "friendly"
-        #     )
-
-        # save_message(convo_id, "assistant", context_reply)
-
 
     # Step 5: Handle knowledge_query
     elif intent == "knowledge_query":
