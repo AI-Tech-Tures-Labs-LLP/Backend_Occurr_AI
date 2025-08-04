@@ -223,7 +223,7 @@ def complete_task_with_content(task_id: str, task_content: str, image_url: Optio
         raise HTTPException(status_code=401, detail=username)
 
     user = users_collection.find_one({"username": username})
-    if not user:
+    if not user:      
         raise HTTPException(status_code=404, detail="User not found")
     
     completed_task = complete_task(username, task_id, task_content, image_url)
