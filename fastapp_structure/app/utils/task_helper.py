@@ -8,6 +8,7 @@ from app.utils.firebase_push import send_push_notification_v1
 from app.db.breathing_exercise import breathing_collection
 from openai import OpenAI
 import os
+from datetime import datetime, time
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE_URL"))
 
@@ -134,6 +135,7 @@ def generate_daily_tasks_from_profile(user):
 
 # Complete a task and update the journal
 def complete_task(username: str, task_id: str, task_content: str, image_url: str = None):
+
     task = task_collection.find_one({"_id": ObjectId(task_id), "username": username})
     if not task or task.get("completed"):
         raise ValueError("Task not found or already completed.")
@@ -141,6 +143,8 @@ def complete_task(username: str, task_id: str, task_content: str, image_url: str
     now = datetime.utcnow()
     today = now.date()  
     timestamp = now
+    start = datetime.combine(today, time.min)
+    end = datetime.combine(today, time.max)
 
     # 🔐 Block duplicate breathing logs
     if task["type"] == "breathing":
@@ -209,9 +213,9 @@ def complete_task(username: str, task_id: str, task_content: str, image_url: str
     # 📚 Save to today's journal (conversation type)
     journal = journals_collection.find_one({
         "username": username,
-        "date": today,
-        "type": "conversation"
-    })
+        "type": "conversation",
+        "date": {"$gte": start, "$lte": end}
+        })
 
     if journal:
         journals_collection.update_one(
@@ -223,7 +227,7 @@ def complete_task(username: str, task_id: str, task_content: str, image_url: str
         new_journal = {
             "username": username,
             "type": "conversation",
-            "date": today,
+            "date": {"$gte": start, "$lte": end},
             "timestamp": timestamp,
             "entries": conversation,
             "mood": None
