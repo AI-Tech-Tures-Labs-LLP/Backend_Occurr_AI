@@ -139,7 +139,7 @@ def complete_task(username: str, task_id: str, task_content: str, image_url: str
         raise ValueError("Task not found or already completed.")
 
     now = datetime.utcnow()
-    today = now.date()
+    today = now.date()  
     timestamp = now
 
     # 🔐 Block duplicate breathing logs
