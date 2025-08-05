@@ -2,13 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+from datetime import datetime,time
 import random
 import openai  # ✅ Required for GPT
 
 # from app.api.v1.auth import decode_token
 from app.api.auth.auth import decode_token
-from app.db.journal_model import save_journal_entry, get_journals_by_user_month, get_journals_by_day, patch_journal
+from app.db.journal_model import save_journal_entry, get_journals_by_user_month, get_journals_by_day, patch_journal,get_journals_by_range
 from app.utils.journal_summary_generator import summarize_journals
 from app.utils.journal_prompt_generator import generate_journal_prompt, get_time_of_day
 
@@ -249,3 +249,47 @@ def get_journals_for_day(
         "entries": entries
     }
  
+
+@router.get("/journal/by-range")
+def get_journals_for_range(
+    start_date: str = Query(..., example="2025-05-20"),
+    end_date: str = Query(..., example="2025-05-22"),
+    token: str = Depends(oauth2_scheme)
+):
+    # Validate the token and decode to get the username
+    valid, username = decode_token(token)
+    if not valid:
+        raise HTTPException(status_code=401, detail=username)
+
+    # Ensure that the start and end dates are valid
+    try:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Please use YYYY-MM-DD.")
+
+    # Ensure full day range (00:00 to 23:59) for both start and end dates
+    start_of_day = datetime.combine(start_date_obj, time.min)  # 00:00:00
+    end_of_day = datetime.combine(end_date_obj, time.max)  # 23:59:59.999999
+
+    print(f"start_of_day: {start_of_day}")
+    print(f"end_of_day: {end_of_day}")
+
+    # Query the journals within the specified range
+    entries = get_journals_by_range(username, start_of_day, end_of_day)
+    
+    # Ensure entries is not None
+    if not entries:
+        entries = []
+
+    # Ensure the entries' _id fields are returned as strings
+    for entry in entries:
+        entry["_id"] = str(entry["_id"])
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "entries": entries
+    }
+
+# Helper function to retrieve journals within a range (update this based on your database)

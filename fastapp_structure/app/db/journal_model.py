@@ -105,3 +105,17 @@ def get_or_create_daily_journal(username: str):
 
     result = journals_collection.insert_one(new_journal)
     return journals_collection.find_one({"_id": result.inserted_id})
+
+def get_journals_by_range(username: str, start_date: datetime, end_date: datetime):
+    # Adjust the query to return all journals for the given username and within the date range
+    journals = list(journals_collection.find({
+        "username": username,
+        "timestamp": {
+            "$gte": start_date,  # Greater than or equal to start_date
+            "$lte": end_date  # Less than or equal to end_date
+        }
+    }).sort("timestamp", -1))  # Sort by timestamp, descending
+
+    # Log the query result
+    print(f"Found {len(journals)} entries for {username} between {start_date} and {end_date}")
+    return journals
