@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query,Body
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -9,6 +9,9 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 from app.utils.task_helper import generate_daily_tasks_from_profile, complete_task, check_and_notify_pending_tasks_for_all_users
 from app.core.chatbot_engine import client
+from typing import Optional
+from bson import ObjectId
+from datetime import datetime, time
 from dotenv import load_dotenv
 load_dotenv()
 router = APIRouter()
@@ -216,19 +219,41 @@ def get_task_streak(token: str = Depends(oauth2_scheme)):
     return {"streak": streak}
 
 
+
+ # adjust as needed
+
 @router.put("/task/complete_task")
-def complete_task_with_content(task_id: str, task_content: str, image_url: Optional[str] = None, token: str = Depends(oauth2_scheme)):
-    valid, username = decode_token(token)
-    if not valid:
-        raise HTTPException(status_code=401, detail=username)
+def complete_task_with_chat(
+    task_id: str,
+    task_content: Optional[str] = Body(None),
+    image_url: Optional[str] = Body(None),
+    token: str = Depends(oauth2_scheme)
+):
+    try:
+        # Decode the JWT token to get user data (username and validation)
+        valid, username = decode_token(token)
+        if not valid:
+            raise HTTPException(status_code=401, detail=username)
 
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Fetch user from DB based on the username
     user = users_collection.find_one({"username": username})
-    if not user:      
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
-    completed_task = complete_task(username, task_id, task_content, image_url)
-    if not completed_task:
-        raise HTTPException(status_code=404, detail="Task not found or already completed")
-    return {'result': completed_task,'status': 'success'}
 
+    try:
+        from app.utils.task_helper import complete_task  # <- ensure this points to your updated function
+        result = complete_task(username=username, task_id=task_id, task_content=task_content, image_url=image_url)
 
+        if not result:
+            raise HTTPException(status_code=404, detail="Task not found or already completed")
+        
+        return {
+            "status": "success",
+            "result": result
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

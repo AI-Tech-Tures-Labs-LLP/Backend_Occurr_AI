@@ -8,109 +8,227 @@ from app.utils.firebase_push import send_push_notification_v1
 from app.db.breathing_exercise import breathing_collection
 from openai import OpenAI
 import os
+from typing import Optional
+    #     return datetime.combine(today, datetime.max.time())
+import re
 from datetime import datetime, time
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE_URL"))
 
 
 # Generate daily tasks based on user profile and schedule
+# def generate_daily_tasks_from_profile(user):
+#     username = user["username"]
+#     today = datetime.utcnow().date()
+#     schedule = user.get("schedule", {})
+#     task_templates = []
+
+#     # def dt_today_at(time_str):
+#     #     t = datetime.strptime(time_str, "%H:%M").time()
+#     #     return datetime.combine(today,t)
+
+#     # def dt_end_of_day():
+
+
+#     def dt_today_at(time_str):
+#         # Fallback if None or not a string
+#         if not isinstance(time_str, str):
+#             print(f"⚠️ Invalid time format (not string): {time_str}. Using default 09:00")
+#             time_str = "09:00"
+
+#         time_str = time_str.strip()
+
+#         # Validate format using regex
+#         if not re.match(r"^(?:[01]?\d|2[0-3]):[0-5]\d$", time_str):
+#             print(f"⚠️ Time string '{time_str}' is not in valid HH:MM format. Using default 09:00")
+#             time_str = "09:00"
+
+#         try:
+#             t = datetime.strptime(time_str, "%H:%M").time()
+#         except ValueError:
+#             print(f"⚠️ Error parsing time: {time_str}. Using default 09:00")
+#             t = datetime.strptime("09:00", "%H:%M").time()
+
+#         return datetime.combine(today, t)
+
+
+#     def dt_end_of_day():
+#         return datetime.combine(today, datetime.max.time())
+
+#     # Breakfast Task
+#     if "breakfast_time" in schedule:
+#         task_templates.append({
+#             "title": "Log your breakfast",
+#             "type": "meal",
+#             "trigger_time": dt_today_at(schedule["breakfast_time"]),
+#             "metadata": {"meal": "breakfast"},
+#             "expires_at": dt_end_of_day()
+#         })
+
+#     # Lunch Task
+#     if "lunch_time" in schedule:
+#         task_templates.append({
+#             "title": "Log your lunch",
+#             "type": "meal",
+#             "trigger_time": dt_today_at(schedule["lunch_time"]),
+#             "metadata": {"meal": "lunch"},
+#             "expires_at": dt_end_of_day()
+#         })
+
+#     # Dinner Task
+#     if "dinner_time" in schedule:
+#         task_templates.append({
+#             "title": "Log your dinner",
+#             "type": "meal",
+#             "trigger_time": dt_today_at(schedule["dinner_time"]),
+#             "metadata": {"meal": "dinner"},
+#             "expires_at": dt_end_of_day()
+#         })
+
+#     # Meditation Task
+#     if "meditation_time" in schedule:
+#         task_templates.append({
+#             "title": "Do your daily meditation",
+#             "type": "meditation",
+#             "trigger_time": dt_today_at(schedule["meditation_time"]),
+#             "expires_at": dt_end_of_day()
+#         })
+
+
+#     # Exercise Task
+#     if "exercise_time" in schedule or "workout_time" in schedule:
+#         task_templates.append({
+#             "title": "Log your exercise",
+#             "type": "exercise",
+#             "trigger_time": dt_today_at(schedule.get("exercise_time", schedule.get("workout_time"))),
+#             "expires_at": dt_end_of_day()
+#         })
+
+#    #Breathing Task
+#     # Check for breathing time or breathing exercise time
+#     if "breathing_time" in schedule or "breathing_exercise_time" in schedule:
+#         task_templates.append({
+#             "title": "Do your breathing exercises",
+#             "type": "breathing",
+#             "trigger_time": dt_today_at(schedule.get("breathing_time", schedule.get("breathing_exercise_time"))),
+#             "expires_at": dt_end_of_day()
+#         })
+
+#     # Reflect Task (before sleep)
+#     if "sleep_time" in schedule:
+#         task_templates.append({
+#             "title": "Reflect on your workday",
+#             "type": "reflection",
+#             "trigger_time": dt_today_at(schedule["sleep_time"]) - timedelta(hours=1),
+#             "expires_at": dt_end_of_day()
+#         })
+
+
+#     for task in task_templates:
+#         # ✅ Check if a similar task already exists today
+#         existing = task_collection.find_one({
+#             "username": username,
+#             "title": task["title"],
+#             "trigger_time": task["trigger_time"]
+#         })
+
+#         if existing:
+#             # print(f"⏩ Task already exists for {username}: {task['title']} at {task['trigger_time']}")
+#             continue
+
+#         task_doc = build_task_doc(
+#             username=username,
+#             type=task["type"],
+#             title=task["title"],
+#             trigger_time=task["trigger_time"],
+#             expires_at=task["expires_at"],
+#             metadata=task.get("metadata")
+#         )
+#         task_collection.insert_one(task_doc)
+#         print(f"✅ Created task for {username}: {task['title']} at {task['trigger_time']}")
+
 def generate_daily_tasks_from_profile(user):
+    from datetime import datetime, time, timedelta
+    import re
+
     username = user["username"]
     today = datetime.utcnow().date()
-
     schedule = user.get("schedule", {})
     task_templates = []
 
-    # def dt_today_at(time_str):
-    #     t = datetime.strptime(time_str, "%H:%M").time()
-    #     return datetime.combine(today,t)
-
-    # def dt_end_of_day():
-    #     return datetime.combine(today, datetime.max.time())
     def dt_today_at(time_str):
-        if not time_str:
-            # Handle the case when time_str is None (set a default time)
-            # For example, default to 09:00
+        if not isinstance(time_str, str):
             time_str = "09:00"
-        t = datetime.strptime(time_str, "%H:%M").time()
+        time_str = time_str.strip()
+
+        if not re.match(r"^(?:[01]?\d|2[0-3]):[0-5]\d$", time_str):
+            print(f"⚠️ Invalid time format: {time_str}. Using default 09:00")
+            time_str = "09:00"
+
+        try:
+            t = datetime.strptime(time_str, "%H:%M").time()
+        except ValueError:
+            t = datetime.strptime("09:00", "%H:%M").time()
+
         return datetime.combine(today, t)
 
     def dt_end_of_day():
         return datetime.combine(today, datetime.max.time())
 
-    # Breakfast Task
-    if "breakfast_time" in schedule:
+    def guess_type_from_key(key):
+        if "meal" in key or "breakfast" in key or "lunch" in key or "dinner" in key:
+            return "meal"
+        if "meditation" in key:
+            return "meditation"
+        if "exercise" in key or "workout" in key:
+            return "exercise"
+        if "breathing" in key:
+            return "breathing"
+        if "sleep" in key or "reflection" in key:
+            return "reflection"
+        if "journal" in key:
+            return "journaling"
+        if "focus" in key or "study" in key:
+            return "focus"
+        return "general"
+
+    def format_title_from_key(key):
+        label = key.replace("_time", "").replace("_", " ").strip().capitalize()
+        if "meal" in key or "breakfast" in key or "lunch" in key or "dinner" in key:
+            return f"Log your {label}"
+        if "meditation" in key:
+            return "Do your daily meditation"
+        if "exercise" in key or "workout" in key:
+            return "Log your exercise"
+        if "breathing" in key:
+            return "Do your breathing exercises"
+        if "sleep" in key or "reflection" in key:
+            return "Reflect on your workday"
+        if "journal" in key:
+            return "Write your journal entry"
+        return f"Do your {label}"
+
+    for key, time_str in schedule.items():
+        if not key.endswith("_time"):
+            continue  # ignore non-time keys
+
+        task_type = guess_type_from_key(key)
+        title = format_title_from_key(key)
+        trigger_time = dt_today_at(time_str)
+
+        # Optional: offset reflection 1 hour before sleep
+        if task_type == "reflection":
+            trigger_time -= timedelta(hours=1)
+
         task_templates.append({
-            "title": "Log your breakfast",
-            "type": "meal",
-            "trigger_time": dt_today_at(schedule["breakfast_time"]),
-            "metadata": {"meal": "breakfast"},
+            "title": title,
+            "type": task_type,
+            "trigger_time": trigger_time,
             "expires_at": dt_end_of_day()
         })
 
-    # Lunch Task
-    if "lunch_time" in schedule:
-        task_templates.append({
-            "title": "Log your lunch",
-            "type": "meal",
-            "trigger_time": dt_today_at(schedule["lunch_time"]),
-            "metadata": {"meal": "lunch"},
-            "expires_at": dt_end_of_day()
-        })
-
-    # Dinner Task
-    if "dinner_time" in schedule:
-        task_templates.append({
-            "title": "Log your dinner",
-            "type": "meal",
-            "trigger_time": dt_today_at(schedule["dinner_time"]),
-            "metadata": {"meal": "dinner"},
-            "expires_at": dt_end_of_day()
-        })
-
-    # Meditation Task
-    if "meditation_time" in schedule:
-        task_templates.append({
-            "title": "Do your daily meditation",
-            "type": "meditation",
-            "trigger_time": dt_today_at(schedule["meditation_time"]),
-            "expires_at": dt_end_of_day()
-        })
-
-
-    # Exercise Task
-    if "exercise_time" in schedule or "workout_time" in schedule:
-        task_templates.append({
-            "title": "Log your exercise",
-            "type": "exercise",
-            "trigger_time": dt_today_at(schedule.get("exercise_time", schedule.get("workout_time"))),
-            "expires_at": dt_end_of_day()
-        })
-
-   #Breathing Task
-    # Check for breathing time or breathing exercise time
-    if "breathing_time" in schedule or "breathing_exercise_time" in schedule:
-        task_templates.append({
-            "title": "Do your breathing exercises",
-            "type": "breathing",
-            "trigger_time": dt_today_at(schedule.get("breathing_time", schedule.get("breathing_exercise_time"))),
-            "expires_at": dt_end_of_day()
-        })
-
-    # Reflect Task (before sleep)
-    if "sleep_time" in schedule:
-        task_templates.append({
-            "title": "Reflect on your workday",
-            "type": "reflection",
-            "trigger_time": dt_today_at(schedule["sleep_time"]) - timedelta(hours=1),
-            "expires_at": dt_end_of_day()
-        })
-
-
-
-
+    # Create tasks in DB if not already present
     for task in task_templates:
-        # ✅ Check if a similar task already exists today
         existing = task_collection.find_one({
             "username": username,
             "title": task["title"],
@@ -118,7 +236,6 @@ def generate_daily_tasks_from_profile(user):
         })
 
         if existing:
-            # print(f"⏩ Task already exists for {username}: {task['title']} at {task['trigger_time']}")
             continue
 
         task_doc = build_task_doc(
@@ -127,55 +244,132 @@ def generate_daily_tasks_from_profile(user):
             title=task["title"],
             trigger_time=task["trigger_time"],
             expires_at=task["expires_at"],
-            metadata=task.get("metadata")
         )
+
         task_collection.insert_one(task_doc)
         print(f"✅ Created task for {username}: {task['title']} at {task['trigger_time']}")
 
-
 # Complete a task and update the journal
-def complete_task(username: str, task_id: str, task_content: str, image_url: str = None):
+# from datetime import datetime, time
+# from typing import Optional
 
-    task = task_collection.find_one({"_id": ObjectId(task_id), "username": username})
-    if not task or task.get("completed"):
-        raise ValueError("Task not found or already completed.")
 
+from datetime import datetime, time
+from typing import Optional
+
+def complete_task(username: str, task_id: str, task_content: Optional[str] = None, image_url: Optional[str] = None):
     now = datetime.utcnow()
-    today = now.date()  
-    timestamp = now
+    today = now.date()
     start = datetime.combine(today, time.min)
     end = datetime.combine(today, time.max)
 
-    # 🔐 Block duplicate breathing logs
-    if task["type"] == "breathing":
-        start = datetime.combine(today, datetime.min.time())
-        end = datetime.combine(today, datetime.max.time())
+    # Fetch the task by ID and username
+    task = task_collection.find_one({"_id": ObjectId(task_id), "username": username})
+    if not task:
+        raise ValueError("Task not found")
+
+    # Check if the task has expired
+    expires_at = task.get("expires_at")
+    if expires_at and now > expires_at:
+        raise ValueError("Task has expired and cannot be completed.")
+
+    # Breathing: prevent multiple per day
+    if task["type"] == "breathing" and task_content is None:
         already_logged = breathing_collection.find_one({
             "username": username,
             "timestamp": {"$gte": start, "$lte": end}
         })
         if already_logged:
             return {
-                "message": "Breathing session already recorded for today.",
+                "message": "Breathing already logged today.",
                 "journal_id": None,
-                "assistant_reply": None
+                "assistant_reply": "No further actions needed.",
+                "completed": False
             }
 
-    # ✅ Use task title as assistant prompt
-    assistant_prompt = f"Can you tell me more about: {task['title']}?"
-    user_reply = task_content.strip()
+    # Find/create today's journal
+    journal = journals_collection.find_one({
+        "username": username,
+        "type": "conversation",
+        "timestamp": {"$gte": start, "$lte": end}
+    })
 
-    # Build chat conversation so far
-    conversation = [
-        {"role": "assistant", "content": assistant_prompt, "timestamp": timestamp},
-        {"role": "user", "content": user_reply, "timestamp": timestamp}
-    ]
+    if not journal:
+        new_journal = {
+            "username": username,
+            "type": "conversation",
+            "timestamp": now,
+            "entries": [],
+            "mood": None
+        }
+        journal_id = journals_collection.insert_one(new_journal).inserted_id
+    else:
+        journal_id = journal["_id"]
 
-    # 📊 Optional: Handle food image if task is 'meal'
+    def append_to_journal(entries):
+        journals_collection.update_one(
+            {"_id": journal_id},
+            {"$push": {"entries": {"$each": entries}}}
+        )
+
+    conv_count = task.get("conv_count", 0)
+    MAX_TURNS = 4  # max user replies
+
+    # If task_content is None, ask the initial assistant message
+    if task_content is None:
+        assistant_msg = f"Can you tell me more about: {task['title']}?"
+        append_to_journal([{
+            "role": "assistant", "content": assistant_msg, "timestamp": now
+        }])
+
+        task_collection.update_one(
+            {"_id": task["_id"]},
+            {"$set": {"status": "in_progress", "conv_count": conv_count, "last_prompt": assistant_msg}}
+        )
+
+        return {
+            "message": "Started chat for task.",
+            "journal_id": str(journal_id),
+            "assistant_reply": assistant_msg,
+            "completed": False
+        }
+
+    # If task_content is provided, generate a dynamic follow-up question using GPT
+    if task_content:
+        try:
+            # Request GPT model to generate a follow-up question based on task_content
+            follow_response = client.chat.completions.create(
+                model=os.getenv("OPENAI_API_MODEL"),  # Ensure the model is correct
+                messages=[
+                    {"role": "system", "content": (
+                        "You are a friendly journaling assistant. Based on the user's response, "
+                        "ask a short helpful question that continues the conversation."
+                    )},
+                    {"role": "user", "content": task_content}
+                ],
+                max_tokens=50,
+                temperature=0.6
+            )
+            
+            # Check if GPT returned a valid response
+            if follow_response.choices and follow_response.choices[0].message.content.strip():
+                follow_up = follow_response.choices[0].message.content.strip()
+            else:
+                # If no valid response, ask for more details
+                follow_up = "Could you clarify what you meant by that? Can you provide more details?"
+            
+        except Exception as e:
+            print("Follow-up GPT error:", e)
+            follow_up = "Sorry, I didn't catch that. Can you share more about your task?"
+
+        entries = [{"role": "user", "content": task_content.strip(), "timestamp": now}]
+        append_to_journal(entries)
+        conv_count += 1
+    # Optional: handle meal image
     if task["type"] == "meal" and image_url:
         try:
             vision_response = client.chat.completions.create(
-                model="gpt-4-vision-preview",
+                model="gpt-4",  # Ensure the model is valid
                 messages=[
                     {"role": "system", "content": "You're a nutrition assistant. Estimate calories and food details from image."},
                     {"role": "user", "content": [
@@ -185,71 +379,51 @@ def complete_task(username: str, task_id: str, task_content: str, image_url: str
                 ],
                 max_tokens=100
             )
-            nutrition_info = vision_response.choices[0].message.content.strip()
-            conversation.append({"role": "assistant", "content": nutrition_info, "timestamp": timestamp})
+            vision_info = vision_response.choices[0].message.content.strip()
+            entries.append({"role": "assistant", "content": vision_info, "timestamp": now})
         except Exception as e:
-            print(f"GPT Vision error: {e}")
+            print("GPT vision error:", e)
+            entries.append({"role": "assistant", "content": "Error processing image.", "timestamp": now})
 
-    # 🤔 Generate AI follow-up
-    follow_up = None
-    try:
-        followup_response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": (
-                    "You're a friendly journaling assistant. After each user response, ask a short helpful question that continues the conversation based on the task title."
-                )},
-                {"role": "assistant", "content": assistant_prompt},
-                {"role": "user", "content": user_reply}
-            ],
-            max_tokens=50,
-            temperature=0.6
-        )
-        follow_up = followup_response.choices[0].message.content.strip()
-        conversation.append({"role": "assistant", "content": follow_up, "timestamp": timestamp})
-    except Exception as e:
-        print("GPT follow-up error:", e)
+    # Decide if follow-up or complete
+    is_complete = conv_count >= MAX_TURNS
+    if not is_complete:
+        follow_up = follow_up or "Sorry, I didn't catch that. Can you share more about your task?"
 
-    # 📚 Save to today's journal (conversation type)
-    journal = journals_collection.find_one({
-        "username": username,
-        "type": "conversation",
-        "date": {"$gte": start, "$lte": end}
+    # Save entries to journal
+    append_to_journal(entries)
+
+    task_updates = {
+        "conv_count": conv_count,
+        "journal_entry_id": str(journal_id)
+    }
+
+    if is_complete:
+        task_updates.update({
+            "completed": True,
+            "status": "completed",
+            "completed_at": now
+        })
+    else:
+        task_updates.update({
+            "status": "in_progress",
+            "last_prompt": follow_up
         })
 
-    if journal:
-        journals_collection.update_one(
-            {"_id": journal["_id"]},
-            {"$push": {"entries": {"$each": conversation}}}
-        )
-        journal_id = journal["_id"]
-    else:
-        new_journal = {
-            "username": username,
-            "type": "conversation",
-            "date": {"$gte": start, "$lte": end},
-            "timestamp": timestamp,
-            "entries": conversation,
-            "mood": None
-        }
-        result = journals_collection.insert_one(new_journal)
-        journal_id = result.inserted_id
-
-    # ✅ Mark task complete
     task_collection.update_one(
         {"_id": task["_id"]},
-        {"$set": {
-            "completed": True,
-            "completed_at": timestamp,
-            "journal_entry_id": str(journal_id)
-        }}
+        {"$set": task_updates}
     )
 
     return {
-        "message": "Task completed and journal updated.",
+        "message": "Task completed!" if is_complete else "Task updated.",
         "journal_id": str(journal_id),
-        "assistant_reply": follow_up
+        "assistant_reply": follow_up,
+        "completed": is_complete
     }
+
+
+
 
 
 
