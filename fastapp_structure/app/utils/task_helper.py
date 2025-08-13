@@ -162,7 +162,6 @@ def generate_daily_tasks_from_profile(user):
         time_str = time_str.strip()
 
         if not re.match(r"^(?:[01]?\d|2[0-3]):[0-5]\d$", time_str):
-            print(f"⚠️ Invalid time format: {time_str}. Using default 09:00")
             time_str = "09:00"
 
         try:
@@ -362,8 +361,10 @@ def complete_task(username: str, task_id: str, task_content: Optional[str] = Non
             print("Follow-up GPT error:", e)
             follow_up = "Sorry, I didn't catch that. Can you share more about your task?"
 
-        entries = [{"role": "user", "content": task_content.strip(), "timestamp": now}]
-        append_to_journal(entries)
+        entries = [
+            {"role": "user", "content": task_content.strip(), "timestamp": now},
+            {"role": "assistant", "content": follow_up, "timestamp": now}
+        ]
         conv_count += 1
     # Optional: handle meal image
     if task["type"] == "meal" and image_url:
