@@ -176,7 +176,7 @@ def generate_daily_tasks_from_profile(user):
 
     def guess_type_from_key(key):
         if "meal" in key or "breakfast" in key or "lunch" in key or "dinner" in key:
-            return "meal"
+            return key.replace("_time", "").replace("_", " ").strip().lower()
         if "meditation" in key:
             return "meditation"
         if "exercise" in key or "workout" in key:
@@ -367,7 +367,7 @@ def complete_task(username: str, task_id: str, task_content: Optional[str] = Non
         ]
         conv_count += 1
     # Optional: handle meal image
-    if task["type"] == "meal" and image_url:
+    if task["type"] in ["meal", "snack","breakfast","lunch","dinner"] and image_url:
         try:
             vision_response = client.chat.completions.create(
                 model="gpt-4",  # Ensure the model is valid
