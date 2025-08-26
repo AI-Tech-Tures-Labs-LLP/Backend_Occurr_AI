@@ -49,7 +49,7 @@ def get_notifications(token: str = Depends(oauth2_scheme)):
 
 
 @router.post("/mark_notification_read")
-def mark_read(notification_id: str = Body(...), token: str = Depends(oauth2_scheme)):
+def mark_read(notification_id: str , token: str = Depends(oauth2_scheme)):
     valid, username = decode_token(token)
     if not valid:
         raise HTTPException(status_code=401, detail=username)
@@ -192,7 +192,6 @@ def save_alert_response(
         "message": "Response saved.",
         "assistant_reply": assistant_msg
     }
-
 
 # ✅ Initialize Firebase app once (singleton)
 @lru_cache()
