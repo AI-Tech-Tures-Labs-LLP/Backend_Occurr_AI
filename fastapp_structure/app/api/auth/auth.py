@@ -177,7 +177,7 @@ def login_for_access_token(username: str = Form(...), password: str = Form(...))
 
     token = generate_token(username)
     return {"access_token": token, "token_type": "bearer"}
-
+ 
 
 # @router.put("/update-profile")
 # def update_profile(update: UserUpdate, token: str = Depends(oauth2_scheme)):

@@ -70,15 +70,17 @@ def create_health_alert(username, metric, value, timestamp):
     prompt = generate_ai_prompt(metric, value)
     if not prompt:
         return
-    alert_collection.insert_one({
+    alert_doc = {
         "username": username,
         "metric": metric,
         "value": value,
         "timestamp": timestamp,
         "message": prompt,
         "responded": False,
-        "created_at": datetime.utcnow().replace(tzinfo=timezone.utc)
-    })
+        "created_at": datetime.utcnow().replace(tzinfo=timezone.utc),
+    }
+    res = alert_collection.insert_one(alert_doc)
+    alert_id = str(res.inserted_id)
 
     # notifications_collection.insert_one({
     #     "username": username,
@@ -93,9 +95,7 @@ def create_health_alert(username, metric, value, timestamp):
         username = username,
         title= f"Health Alert: {metric.capitalize()}",
         body = prompt,
-        read = False,
-        # timestamp =datetime.utcnow().replace(tzinfo=timezone.utc),
-        alert_id = str(alert_collection.inserted_id)
+        alert_id = alert_id
     )
 
 

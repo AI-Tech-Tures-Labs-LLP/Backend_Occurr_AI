@@ -228,15 +228,29 @@ def generate_daily_tasks_from_profile(user):
 
     # Create tasks in DB if not already present
     for task in task_templates:
+        day_start = datetime.combine(today, datetime.min.time())
+        day_end   = datetime.combine(today, datetime.max.time())
         existing = task_collection.find_one({
             "username": username,
             "title": task["title"],
-            "trigger_time": task["trigger_time"]
+            "trigger_time": {"$gte": day_start, "$lte": day_end},
         })
-
+ 
         if existing:
+            # If the time changed, update it; else skip
+            if existing.get("trigger_time") != task["trigger_time"]:
+                task_collection.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {
+                        "trigger_time": task["trigger_time"],
+                        "expires_at": task["expires_at"],
+                        "updated_at": datetime.utcnow(),
+                        "meta.schedule_sync_reason": "daily_regen_time_adjust"
+                    }}
+                )
             continue
-
+ 
+        # create new
         task_doc = build_task_doc(
             username=username,
             type=task["type"],
@@ -244,7 +258,6 @@ def generate_daily_tasks_from_profile(user):
             trigger_time=task["trigger_time"],
             expires_at=task["expires_at"],
         )
-
         task_collection.insert_one(task_doc)
         print(f"✅ Created task for {username}: {task['title']} at {task['trigger_time']}")
 
@@ -522,7 +535,6 @@ def send_push_notification(username: str, title: str, body: str, task_id=None, a
         username=username,
         title=title,
         body=body,
-        read=False,
         task_id=task_id,
         alert_id=alert_id
     )
