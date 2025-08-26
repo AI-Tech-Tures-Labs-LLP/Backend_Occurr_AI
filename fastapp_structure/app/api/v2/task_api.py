@@ -192,29 +192,26 @@ def get_task_streak(token: str = Depends(oauth2_scheme)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Calculate streak
-    # tasks = list(task_collection.find({"username": username, "completed": True}, {"_id": 0, "date": 1}).sort("date", 1))
+    # Fetch only completed tasks, sorted
     tasks = list(task_collection.find(
-        {
-            "username": username,
-           "completed": True
-            # "trigger_time": {"$gte": start_of_day, "$lt": end_of_day}
-        }
-    ).sort("trigger_time", 1))  # Sort by trigger_time
+        {"username": username, "completed": True}
+    ).sort("created_at", 1))
 
-    # Convert ObjectId to string for serialization (if needed)
     for task in tasks:
         task["_id"] = str(task["_id"])
 
     if not tasks:
         return {"streak": 0}
 
-    streak = 0
+    streak = 0 # at least one day if tasks exist
     for i in range(1, len(tasks)):
-        if tasks[i]["date"] == (datetime.strptime(tasks[i - 1]["date"], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d"):
+        prev_day = tasks[i - 1]["created_at"].date()
+        this_day = tasks[i]["created_at"].date()
+
+        if this_day == prev_day + timedelta(days=1):
             streak += 1
         else:
-            break
+            streak = 1  # reset streak if gap is found
 
     return {"streak": streak}
 

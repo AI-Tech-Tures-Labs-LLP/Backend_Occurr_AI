@@ -13,7 +13,7 @@ notifications_collection = db["notifications"]
 
 
 
-def save_notification(username: str, title: str, body: str, read: bool, task_id: str = None, alert_id: str = None):
+def save_notification(username: str, title: str, body: str, task_id: str = None, alert_id: str = None):
     # Create the notification document
     notification = {
         "username": username,
@@ -35,7 +35,7 @@ def save_notification(username: str, title: str, body: str, read: bool, task_id:
     # Insert the notification into the database
     try:
         result = notifications_collection.insert_one(notification)
-        return str(result.inserted_id)  # Return the ID of the inserted notification document
+        return str(result.inserted_id)  # Return the ID of the inserted notification document 
     except Exception as e:
         print(f"Error inserting notification: {e}")
         return None
