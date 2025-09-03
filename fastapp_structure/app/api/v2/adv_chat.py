@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from bson import ObjectId
 from datetime import datetime, timedelta
 import os, json, re
-from openai import OpenAI as OpenAIClient
+from groq import Groq as OpenAIClient
 
 # Database imports
 from app.db.database import users_collection, conversations_collection
@@ -82,6 +82,7 @@ def load_index_descriptions_from_folders(base_path: str) -> dict:
     return descriptions
 
 def find_best_matching_index(query: str, index_descriptions: dict) -> str:
+    start_time = time.perf_counter()
     query_embedding = topic_model.encode(query, convert_to_tensor=True)
     best_index = None
     best_score = -1
@@ -92,8 +93,12 @@ def find_best_matching_index(query: str, index_descriptions: dict) -> str:
         if score > best_score:
             best_score = score
             best_index = index_name
-
+    
+    end_time = time.perf_counter()
+    elapsed_time = end_time - start_time
+    print(f"⏱️ Elapsed time for finding best matching index: {elapsed_time:.4f} seconds")
     print(f"🔍 Best match: {best_index} (score: {best_score:.4f})")
+    print(f"🔍 Worst match: {index_name} (score: {score:.4f})")
     return best_index
 
 

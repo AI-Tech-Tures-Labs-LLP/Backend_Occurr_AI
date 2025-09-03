@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import random
-from openai import OpenAI
+from groq import Groq
 
 # from app.api.v1.auth import decode_token
 from app.api.auth.auth import decode_token
@@ -20,7 +20,7 @@ load_dotenv()
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-client = client or OpenAI(api_key=os.getenv("OPENAI_API_KEY"),base_url=os.getenv("OPENAI_API_BASE_URL"))
+client = client or Groq(api_key=os.getenv("OPENAI_API_KEY"),base_url=os.getenv("OPENAI_API_BASE_URL"))
 
 
 class AlertResponseRequest(BaseModel):

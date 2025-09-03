@@ -6,14 +6,14 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 from app.utils.firebase_push import send_push_notification_v1 
 from app.db.breathing_exercise import breathing_collection
-from openai import OpenAI
+from groq import Groq
 import os
 from typing import Optional
     #     return datetime.combine(today, datetime.max.time())
 import re
 from datetime import datetime, time
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE_URL"))
+client = Groq(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE_URL"))
 
 
 # Generate daily tasks based on user profile and schedule

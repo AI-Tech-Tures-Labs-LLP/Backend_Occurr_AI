@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import List
 from app.db.journal_model import journals_collection
 from datetime import datetime, timedelta
-from openai import OpenAI
+from groq import Groq
 # from app.auth import get_current_user
 import dateparser
 from bson import ObjectId   
@@ -17,7 +17,7 @@ import re
 
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings  # ✅ For DeepSeek
-from openai import OpenAI as OpenAIClient
+from groq import Groq as OpenAIClient
 from dateutil.parser import parse
 from dotenv import load_dotenv
 load_dotenv()

@@ -17,7 +17,9 @@ from fastapi.openapi.utils import get_openapi
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.db.database import db
 from app.utils.task_helper import generate_daily_tasks_from_profile,check_and_notify_pending_tasks_for_all_users
+from app.utils.optimized_code_rag import prewarm_indexes
 from app.utils.settings_secheduler import check_journal_times
+import os
 app = FastAPI(title="Smart Assistant API")
 subapp = FastAPI(title="try Sub Mount")
 
@@ -74,6 +76,21 @@ app.include_router(routes.router, prefix="/api/v1")
 app.include_router(v2_routes.router, prefix="/api/v2")
 
 
+
+# @app.on_event("startup")
+# async def _kb_startup():
+#     base = os.getenv("FAISS_FOLDER_PATH", "data/faiss_indexes")
+#     # Preload all, or cap with KB_PRELOAD_LIMIT to keep RAM small
+#     limit = int(os.getenv("KB_PRELOAD_LIMIT", "0")) or None
+#     prewarm_indexes(base, limit=limit)
+
+
+
+@app.on_event("startup")
+async def _kb_startup():
+    base = os.getenv("FAISS_FOLDER_PATH", "data/faiss_indexes")
+    # warm 1–N indexes so first user query is hot
+    prewarm_indexes(base, limit=int(os.getenv("KB_PRELOAD_LIMIT", "1")))
 
 
 @app.get("/")

@@ -1,14 +1,14 @@
 
 
 ###Version 2: Improved error handling and prompt generation logic
-from openai import OpenAI
+from groq import Groq
 import os
 from fastapi import HTTPException
 from datetime import datetime
 import random
 import asyncio
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"),base_url=os.getenv("OPENAI_API_BASE_URL"))
+client = Groq(api_key=os.getenv("OPENAI_API_KEY"),base_url=os.getenv("OPENAI_API_BASE_URL"))
 
 recent_journal_prompts = set()
 

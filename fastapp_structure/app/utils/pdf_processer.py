@@ -135,6 +135,7 @@ from typing import List
 from pathlib import Path
 
 from pypdf import PdfReader
+import fitz  # PyMuPDF, better PDF text extraction
 from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -147,36 +148,65 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # Function to parse PDF and extract text content
-def parse_pdf(file_path: str) -> List[str]:
-    """Extract text content from PDF file"""
-    print(f"📖 Reading PDF: {Path(file_path).name}")
+# def parse_pdf(file_path: str) -> List[str]:
+#     """Extract text content from PDF file"""
+#     print(f"📖 Reading PDF: {Path(file_path).name}")
     
-    with open(file_path, 'rb') as file:
-        pdf = PdfReader(file)
-        output = []
+#     with open(file_path, 'rb') as file:
+#         pdf = fitz.open(file)
+#         output = []
         
-        for page_num, page in enumerate(pdf.pages, 1):
-            text = page.extract_text()
-            if not text:
-                print(f"⚠️ No text found on page {page_num}")
-                continue
+#         for page_num, page in enumerate(pdf.pages, 1):
+#             text = page.extract_text()
+#             if not text:
+#                 print(f"⚠️ No text found on page {page_num}")
+#                 continue
                 
-            # Clean up text formatting
-            text = re.sub(r"(\w+)-\n(\w+)", r"\1\2", text)  # Merge hyphenated words
-            text = re.sub(r"(?<!\n\s)\n(?!\s\n)", " ", text.strip())  # Fix newlines
-            text = re.sub(r"\n\s*\n", "\n\n", text)  # Remove multiple newlines
-            output.append(text)
+#             # Clean up text formatting
+#             text = re.sub(r"(\w+)-\n(\w+)", r"\1\2", text)  # Merge hyphenated words
+#             text = re.sub(r"(?<!\n\s)\n(?!\s\n)", " ", text.strip())  # Fix newlines
+#             text = re.sub(r"\n\s*\n", "\n\n", text)  # Remove multiple newlines
+#             output.append(text)
             
-        print(f"✅ Extracted text from {len(output)} pages")
-        return output
+#         print(f"✅ Extracted text from {len(output)} pages")
+#         return output
+
+def parse_pdf(path: str) -> str:
+    """
+    Read a PDF with PyMuPDF and return plain text.
+    - Works for normal PDFs
+    - Skips encrypted PDFs (unless they open with empty password)
+    """
+    fname = os.path.basename(path)
+    print(f"📖 Reading PDF: {fname}")
+
+    text_chunks = []
+    # open the document
+    with fitz.open(path) as doc:
+        # try to handle encryption (empty password)
+        if doc.is_encrypted:
+            try:
+                doc.authenticate("")  # try empty password
+            except Exception:
+                pass
+            if doc.is_encrypted:
+                raise RuntimeError("Encrypted PDF; cannot read without password")
+
+        # iterate pages correctly
+        for page_index in range(doc.page_count):              # or: for page_index, page in enumerate(doc):
+            page = doc.load_page(page_index)                  # get Page object
+            text = page.get_text("text") or ""                # plain text extraction
+            text_chunks.append(text.strip())
+
+    return "\n\n".join(text_chunks)
 
 # Function to convert text content into documents
-def text_to_docs(text: List[str], source: str) -> List[Document]:
+def text_to_docs(text: str, source: str) -> List[Document]:
     """Convert extracted text into LangChain documents with metadata"""
     print(f"📝 Converting text to documents for: {source}")
     
     # Create page documents
-    page_docs = [Document(page_content=page) for page in text]
+    page_docs = [Document(page_content=page) for page in text.split("\n\n")]
     for i, doc in enumerate(page_docs):
         doc.metadata["page"] = i + 1
         doc.metadata["source_pdf"] = source

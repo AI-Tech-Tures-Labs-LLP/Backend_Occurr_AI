@@ -9,7 +9,7 @@ import os
 from app.utils.optimized_code_rag import load_faiss_index
 FAISS_FOLDER_PATH = os.path.join("data", "faiss_indexes")
 import os
-from openai import OpenAI as OpenAIClient
+from groq import Groq as OpenAIClient
 
 # # FAISS_FOLDER_PATH = r"faiss_indexes"
 # # from langchain_community.embeddings import OpenAIEmbeddings
@@ -77,10 +77,10 @@ from openai import OpenAI as OpenAIClient
 
 #     return previous_query, previous_response, current_query
 
-# from openai import OpenAI  # or your OpenAI client setup
+# from groq import Groq  # or your OpenAI client setup
 # import os
 
-# client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # or however you initialize your client
+# client = Groq(api_key=os.getenv("OPENAI_API_KEY"))  # or however you initialize your client
 
 # def gpt_fallback(user_query: str) -> str:
 #     """
@@ -301,12 +301,12 @@ from openai import OpenAI as OpenAIClient
 
 import os
 from typing import List
-from openai import OpenAI
+from groq import Groq
 from app.utils.optimized_code_rag import load_faiss_index
 from app.utils.optimized_code_rag import query_documents
 
 FAISS_FOLDER_PATH = os.path.join("data", "faiss_indexes")
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"),base_url=os.getenv("OPENAI_API_BASE_URL"))
+client = Groq(api_key=os.getenv("OPENAI_API_KEY"),base_url=os.getenv("OPENAI_API_BASE_URL"))
 loaded_indexes = {}
 
 def extract_context(messages):

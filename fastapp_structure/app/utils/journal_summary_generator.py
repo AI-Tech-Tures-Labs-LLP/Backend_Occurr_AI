@@ -1,7 +1,7 @@
-from openai import OpenAI
+from groq import Groq
 import os
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"),base_url=os.getenv("OPENAI_API_BASE_URL"))
+client = Groq(api_key=os.getenv("OPENAI_API_KEY"),base_url=os.getenv("OPENAI_API_BASE_URL"))
 
 def summarize_journals(journal_texts: list[str]) -> str:
     if not journal_texts:
