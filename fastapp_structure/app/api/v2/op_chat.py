@@ -482,7 +482,7 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         parsed = json.loads(cleaned_reply)
         raw_reply = parsed.get("reply", raw_llm_reply)
         intent = parsed.get("intent", "knowledge_query")
-        tag = parsed.get("tag")
+        tag = parsed.get("tag") 
         collection = parsed.get("collection")
         print(f"🧾 LLM classified intent: {intent}, tag: {tag}, collection: {collection}")
     except json.JSONDecodeError:
@@ -590,7 +590,6 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
                 )
 
     elif intent == "knowledge_query":
-        kb_context = []
         print("🔄 Searching knowledge base...")
         try:
             start_time = time.perf_counter()
@@ -598,22 +597,32 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
 
             if best_index_name:
                 index_path = os.path.join(FAISS_FOLDER_PATH, best_index_name)
-                if os.path.exists(os.path.join(index_path, "index.faiss")) and os.path.exists(os.path.join(index_path, "index.pkl")):
+                if (
+                    os.path.exists(os.path.join(index_path, "index.faiss"))
+                    and os.path.exists(os.path.join(index_path, "index.pkl"))
+                ):
                     print(f"🔍 Querying FAISS: {best_index_name}")
                     kb_snippets = query_documents(request.question, index_path)
+
                     if kb_snippets:
-                        kb_context.extend(kb_snippets)
-                        context_reply = apply_personality("\n\n".join(kb_context), "friendly")
-            end_time = time.perf_counter()
-            elapsed_time = end_time - start_time
+                        context_reply = apply_personality("\n\n".join(kb_snippets), "friendly")
+                    else:
+                        context_reply = raw_reply or "I'm here to help!"
+            else:
+                context_reply = apply_personality(
+                    "I couldn't find any relevant information in the knowledge base.",
+                    "friendly",
+                )
+
+            elapsed_time = time.perf_counter() - start_time
             print(f"⏱️ Main Elapsed time for knowledge base query: {elapsed_time:.4f} seconds")
         except Exception as e:
             print(f"❌ Knowledge base error: {e}")
-
     if intent == "mongo_query" and context_reply:
         final = context_reply
     elif intent == "knowledge_query" and context_reply:
-        final = context_reply
+        # final = choose_relevant_reply(raw_reply, context_reply, request.question)
+        final = context_reply  # prefer context reply for knowledge queries
     else:
         final = raw_reply or "I'm here to help!"
 
@@ -627,16 +636,16 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
     STYLE_WITH_LLM = os.getenv("KB_STYLE_WITH_LLM", "false").lower() == "true"
 
 # later, right before returning:
-    final_reply = context_reply if (intent in ("mongo_query", "knowledge_query") and context_reply) else (raw_reply or "I'm here to help!")
-    if STYLE_WITH_LLM:
-        final_reply = apply_personality(final_reply, "friendly")
+    # final_reply = context_reply if (intent in ("mongo_query", "knowledge_query") and context_reply) else (raw_reply or "I'm here to help!")
+    # if STYLE_WITH_LLM:
+        # final_reply = apply_personality(final_reply, "friendly")
     history.append({"role": "user", "content": request.question})
     history.append({"role": "assistant", "content": final_reply})
     conversation_store[convo_id] = history[-10:]
 
     print("Context Reply", context_reply )
     print("🧾 Reply:", raw_reply)
-    print("📚 History:", conversation_store[convo_id])
+
 
     save_message(convo_id, "assistant", final_reply)
     recent = get_recent_history(convo_id)

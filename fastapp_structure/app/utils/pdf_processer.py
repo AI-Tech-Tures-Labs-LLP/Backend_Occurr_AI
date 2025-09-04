@@ -127,7 +127,7 @@
 
 
 
-# Emmu
+# Part 2
 
 import os
 import re
@@ -251,8 +251,39 @@ def get_embeddings():
     return embeddings
 
 # Save processed PDF to FAISS index directory
+
+# from langchain_community.vectorstores import FAISS  # (your existing import)
+
+_URL_PAT = re.compile(
+    r"""
+    # Markdown links: [text](http(s)://... or www...)
+    \[([^\]]+)\]\(\s*(?:https?://|www\.)[^\s)]+?\s*\)
+    |
+    # Plain URLs: http(s)://... or www....
+    (?:https?://|www\.)\S+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+def _remove_urls(text: str) -> str:
+    """
+    Remove URLs (plain and markdown) and collapse extra whitespace.
+    Keeps the visible text of markdown links: [text](url) -> text
+    """
+    def _repl(m: re.Match) -> str:
+        # If it's a markdown link, group(1) = link text → keep it
+        if m.group(1):
+            return m.group(1)
+        # Otherwise it's a plain URL → drop
+        return ""
+    cleaned = _URL_PAT.sub(_repl, text or "")
+    # Normalize whitespace
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
+
 def save_pdf_to_faiss(file_path: str, faiss_folder: str, embeddings):
-    """Process single PDF and save to FAISS index"""
+    """Process single PDF and save to FAISS index (URLs removed before embedding)."""
     file_path = Path(file_path)
     faiss_folder = Path(faiss_folder)
 
@@ -265,36 +296,42 @@ def save_pdf_to_faiss(file_path: str, faiss_folder: str, embeddings):
     print(f"{'='*60}")
 
     try:
-        # Extract text from PDF
+        # 1) Extract text from PDF
         text = parse_pdf(str(file_path))
-        
         if not text:
             print(f"⚠️ No text extracted from {file_name}")
             return False
-            
-        # Convert to documents
+
+        # 2) Clean URLs from the full text BEFORE chunking
+        text = _remove_urls(text)
+
+        # 3) Convert to documents (chunks)
         doc_chunks = text_to_docs(text, source=file_name)
 
-        if doc_chunks:
-            print(f"🔄 Creating FAISS index with {len(doc_chunks)} chunks...")
-            
-            # Create FAISS index with FREE embeddings
-            index = FAISS.from_documents(doc_chunks, embeddings)
-
-            # Save index
-            faiss_path.mkdir(parents=True, exist_ok=True)
-            index.save_local(str(faiss_path))
-
-            print(f"✅ FAISS index saved for {file_name}")
-            print(f"📊 Index stats:")
-            print(f"   - Total vectors: {index.index.ntotal}")
-            print(f"   - Vector dimensions: {index.index.d}")
-            print(f"   - Storage path: {faiss_path}")
-            
-            return True
-        else:
+        if not doc_chunks:
             print(f"❌ No chunks generated for {file_name}")
             return False
+
+        # 4) Extra safety: clean each chunk's content (handles any late-added links)
+        for d in doc_chunks:
+            if hasattr(d, "page_content"):
+                d.page_content = _remove_urls(d.page_content)
+
+        print(f"🔄 Creating FAISS index with {len(doc_chunks)} chunks...")
+
+        # 5) Create FAISS index
+        index = FAISS.from_documents(doc_chunks, embeddings)
+
+        # 6) Save index
+        faiss_path.mkdir(parents=True, exist_ok=True)
+        index.save_local(str(faiss_path))
+
+        print(f"✅ FAISS index saved for {file_name}")
+        print(f"📊 Index stats:")
+        print(f"   - Total vectors: {index.index.ntotal}")
+        print(f"   - Vector dimensions: {index.index.d}")
+        print(f"   - Storage path: {faiss_path}")
+        return True
 
     except Exception as e:
         import traceback

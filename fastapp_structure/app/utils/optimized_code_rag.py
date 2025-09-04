@@ -133,15 +133,51 @@ def get_vectorstore(index_dir: str) -> FAISS:
 def load_faiss_index(path: str) -> FAISS:
     return get_vectorstore(_canon(path))
 
-def query_documents(query: str, path: str, top_k: int = 3) -> List[str]:
-    t0 = time.perf_counter()
-    vs = get_vectorstore(_canon(path))   # cold: loads once; warm: ~0ms
-    t1 = time.perf_counter()
-    docs = vs.similarity_search(query, k=top_k)
-    t2 = time.perf_counter()
-    print("⏱️ timings | load_cache={:.3f}s | search={:.3f}s | total={:.3f}s"
-          .format(t1-t0, t2-t1, t2-t0))
-    return [d.page_content.strip() for d in docs]
+
+KB_MIN_SCORE = 0.15  # tune this (0.3–0.4 works well)
+KB_TOPK = 3
+KB_FINAL_K = 3
+
+def query_documents(query: str, path: str) -> list[str]:
+    vs = get_vectorstore(_canon(path))
+    docs_scores = vs.similarity_search_with_relevance_scores(query, k=KB_TOPK)
+
+    kept: list[str] = []
+    for doc, score in docs_scores:
+        if score is None or score < KB_MIN_SCORE:
+            continue
+        kept.append(doc.page_content.strip())
+        if len(kept) >= KB_FINAL_K:
+            break
+
+    return kept
+
+# def query_documents(query: str, path: str, top_k: int = 3) -> List[str]:
+#     t0 = time.perf_counter()
+#     vs = get_vectorstore(_canon(path))   # cold: loads once; warm: ~0ms
+#     t1 = time.perf_counter()
+#     docs = vs.similarity_search(query, k=top_k)
+#     t2 = time.perf_counter()
+#     print("⏱️ timings | load_cache={:.3f}s | search={:.3f}s | total={:.3f}s"
+#           .format(t1-t0, t2-t1, t2-t0))
+#     return [d.page_content.strip() for d in docs]
+# def query_documents(query: str, path: str, top_k: int = 3) -> List[str]:
+#     """
+#     Retrieve top-k relevant documents from a FAISS vector store using HuggingFace embeddings.
+#     No LLM is used here. Returns a list of strings (document content).
+#     """
+#     embeddings = HuggingFaceEmbeddings(
+#         model_name="sentence-transformers/all-MiniLM-L6-v2",
+#         model_kwargs={'device': 'cpu'},
+#         encode_kwargs={'normalize_embeddings': True}
+#     )
+
+#     vectorstore = FAISS.load_local(path, embeddings, allow_dangerous_deserialization=True)
+#     retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
+#     results = retriever.invoke(query)
+
+#     return [doc.page_content.strip() for doc in results]
+
 
 # --- Prewarm helpers ---
 def list_index_dirs(base_dir: str) -> list[str]:
