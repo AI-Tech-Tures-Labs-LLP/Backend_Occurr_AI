@@ -222,8 +222,8 @@ def get_task_streak(token: str = Depends(oauth2_scheme)):
 @router.put("/task/complete_task")
 def complete_task_with_chat(
     task_id: str,
-    task_content: Optional[str],
-    image_url: Optional[str],
+    task_content: Optional[str] = None,
+    image_url: Optional[str] = None,
     token: str = Depends(oauth2_scheme)
 ):
     try:
