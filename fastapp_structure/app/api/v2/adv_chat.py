@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from bson import ObjectId
 from datetime import datetime, timedelta
 import os, json, re
-from groq import Groq as OpenAIClient
+from openai import OpenAI as OpenAIClient
 
 # Database imports
 from app.db.database import users_collection, conversations_collection
@@ -98,7 +98,7 @@ def find_best_matching_index(query: str, index_descriptions: dict) -> str:
     elapsed_time = end_time - start_time
     print(f"⏱️ Elapsed time for finding best matching index: {elapsed_time:.4f} seconds")
     print(f"🔍 Best match: {best_index} (score: {best_score:.4f})")
-    print(f"🔍 Worst match: {index_name} (score: {score:.4f})")
+    print(f"worst")
     return best_index
 
 
@@ -721,7 +721,9 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
         if tag_summary:
             summary_lines = ["📝 **Journal Summary**:"]
             for tag, notes in tag_summary.items():
-                summary_lines.append(f"• {tag}: {' | '.join(notes)}")
+                # summary_lines.append(f"• {tag}: {' | '.join(notes)}")
+                for line in notes:
+                    summary_lines.append(f"• {tag}: {line}")
             context.append("\n".join(summary_lines))
 
 
