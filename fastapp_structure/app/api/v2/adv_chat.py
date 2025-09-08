@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from bson import ObjectId
 from datetime import datetime, timedelta
 import os, json, re
-from openai import OpenAI as OpenAIClient
+from groq import Groq as OpenAIClient
 
 # Database imports
 from app.db.database import users_collection, conversations_collection
@@ -98,7 +98,7 @@ def find_best_matching_index(query: str, index_descriptions: dict) -> str:
     elapsed_time = end_time - start_time
     print(f"⏱️ Elapsed time for finding best matching index: {elapsed_time:.4f} seconds")
     print(f"🔍 Best match: {best_index} (score: {best_score:.4f})")
-    print(f"worst")
+    print(f"🔍 Worst match: {index_name} (score: {score:.4f})")
     return best_index
 
 
@@ -547,142 +547,284 @@ def fetch_personal_data(queries: Dict, username: str) -> Dict[str, List]:
 # CONTEXT BUILDING
 # ============================================================================
 
+
+from datetime import datetime
+from typing import Dict, List, Any, Optional
+from enum import Enum
+
+# ---------- Metric normalization ----------
+class Metric(str, Enum):
+    STEPS = "steps"
+    HEART_RATE = "heart_rate"
+    SPO2 = "spo2"
+    SLEEP = "sleep"
+    CALORIES = "calories"
+    UNKNOWN = "unknown"
+
+_METRIC_ALIASES = {
+    # steps
+    "steps": Metric.STEPS, "step": Metric.STEPS,
+    # heart rate
+    "heart rate": Metric.HEART_RATE, "heart_rate": Metric.HEART_RATE,
+    "heartrate": Metric.HEART_RATE, "hr": Metric.HEART_RATE,
+    "bpm": Metric.HEART_RATE, "heartrates": Metric.HEART_RATE,
+    "heartratebpm": Metric.HEART_RATE, "heartrate_bpm": Metric.HEART_RATE,
+    "heartrate (bpm)": Metric.HEART_RATE, "heartrateb p m": Metric.HEART_RATE,
+    "heartratevalue": Metric.HEART_RATE, "heartrate_value": Metric.HEART_RATE,
+    "heartrateavg": Metric.HEART_RATE, "heartrate_avg": Metric.HEART_RATE,
+    "heartrateaverage": Metric.HEART_RATE, "heartrate_average": Metric.HEART_RATE,
+    "heartrate_max": Metric.HEART_RATE, "heartrate_min": Metric.HEART_RATE,
+    "heartratepeak": Metric.HEART_RATE, "heartRate": Metric.HEART_RATE,  # your key
+    # spo2
+    "spo2": Metric.SPO2, "sp o2": Metric.SPO2, "spO2".lower(): Metric.SPO2,
+    "oxygen": Metric.SPO2, "blood oxygen": Metric.SPO2, "blood_oxygen": Metric.SPO2,
+    # sleep
+    "sleep": Metric.SLEEP, "sleep_hours": Metric.SLEEP,
+    "sleepminutes": Metric.SLEEP, "sleep_minutes": Metric.SLEEP,
+    # calories
+    "calories": Metric.CALORIES, "kcal": Metric.CALORIES, "energy": Metric.CALORIES,
+    "active_calories": Metric.CALORIES, "resting_calories": Metric.CALORIES,
+}
+
+def normalize_metric(m: Any) -> Metric:
+    if not m:
+        return Metric.UNKNOWN
+    key = str(m).strip().lower().replace("-", " ").replace("_", " ")
+    return _METRIC_ALIASES.get(key, Metric.UNKNOWN)
+
+
+# ---------- Builder ----------
 def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
-    """Build comprehensive context from fetched data"""
-    context = []
-    
-    # Health data analysis
-    if data["health_data"]:
-        # Check if it's aggregation result (like total steps)
-        first_item = data["health_data"][0]
-        
-        if isinstance(first_item, dict) and any(key in first_item for key in ['total_steps', 'total_value', 'average_value', 'average_heartrate', 'min_value', 'max_value', 'min_heartrate', 'max_heartrate']):
-            # Handle aggregation results
-            if 'total_steps' in first_item:
-                total = first_item['total_steps']
+    """
+    Build human-friendly context from fetched data.
+    Supports aggregation documents and raw record lists for:
+      - steps, heart_rate, spo2, sleep, calories
+    Also summarizes alerts, journal, and notifications.
+    """
+    context: List[str] = []
+
+    # ---------------- Health data analysis ----------------
+    health = data.get("health_data") or []
+    if health:
+        first_item = health[0]
+
+        # ---- Aggregation-style payloads (totals/averages/min/max) ----
+        # ---- Aggregation-style payloads (totals/averages/min/max) ----
+        if isinstance(first_item, dict) and any(
+            k in first_item
+            for k in [
+                # existing keys you already had...
+                "total_steps","total_value","average_value",
+                "average_heartrate","min_value","max_value",
+                "min_heartrate","max_heartrate",
+                # sleep (hours)
+                "total_sleep_hours","average_sleep_hours","min_sleep_hours","max_sleep_hours",
+                # NEW: sleep (minutes) like your result
+                "total_sleep","average_sleep","min_sleep","max_sleep",
+                # calories
+                "total_calories","average_calories","min_calories","max_calories",
+                # spo2
+                "average_spo2","min_spo2","max_spo2",
+            ]
+        ):
+            # ---------------- STEPS ----------------
+            if "total_steps" in first_item:
+                total = int(round(first_item["total_steps"]))
                 context.append(f"📊 **Total Steps**: You walked **{total:,} steps** during the requested period! 🚶‍♀️")
-                
-            elif 'average_heartrate' in first_item:
-                avg = round(first_item['average_heartrate'], 1)
-                context.append(f"💓 **Average Heart Rate**: Your average heart rate was **{avg} bpm** during the requested period!")
+
+            # ---------------- HEART RATE ----------------
+            elif "average_heartrate" in first_item:
+                avg = round(float(first_item["average_heartrate"]), 1)
+                context.append(f"💓 **Average Heart Rate**: **{avg} bpm** during the requested period.")
                 if avg < 60:
-                    context.append("📘 This is considered bradycardia (slow heart rate). Consider consulting a healthcare professional if you experience symptoms.")
+                    context.append("📘 This falls in bradycardia (<60 bpm). If you notice symptoms, consider consulting a professional.")
                 elif avg > 100:
-                    context.append("📘 This is considered tachycardia (fast heart rate). Consider consulting a healthcare professional if you experience symptoms.")
+                    context.append("📘 This falls in tachycardia (>100 bpm). If you notice symptoms, consider consulting a professional.")
                 else:
-                    context.append("✅ This is within the normal resting heart rate range (60-100 bpm).")
-                    
-            elif 'max_heartrate' in first_item:
-                max_hr = first_item['max_heartrate']
-                context.append(f"📈 **Maximum Heart Rate**: Your peak heart rate was **{max_hr} bpm** during the requested period!")
-                
-            elif 'min_heartrate' in first_item:
-                min_hr = first_item['min_heartrate']
-                context.append(f"📉 **Minimum Heart Rate**: Your lowest heart rate was **{min_hr} bpm** during the requested period!")
-                
-            elif 'total_value' in first_item:
-                total = first_item['total_value']
-                context.append(f"📊 **Total**: {total:,}")
-                
-            elif 'average_value' in first_item:
-                avg = round(first_item['average_value'], 1)
-                context.append(f"📊 **Average**: {avg}")
-                
-            elif 'min_value' in first_item:
-                min_val = first_item['min_value']
-                context.append(f"📊 **Minimum**: {min_val}")
-                
-            elif 'max_value' in first_item:
-                max_val = first_item['max_value']
-                context.append(f"📊 **Maximum**: {max_val}")
-                
+                    context.append("✅ Within typical resting range (60–100 bpm).")
+            elif "max_heartrate" in first_item:
+                context.append(f"📈 **Maximum Heart Rate**: **{float(first_item['max_heartrate']):.0f} bpm**.")
+            elif "min_heartrate" in first_item:
+                context.append(f"📉 **Minimum Heart Rate**: **{float(first_item['min_heartrate']):.0f} bpm**.")
+
+            # ---------------- SLEEP (HOURS) ----------------
+            elif "total_sleep_hours" in first_item:
+                total_sleep = round(float(first_item["total_sleep_hours"]), 2)
+                context.append(f"😴 **Total Sleep**: **{total_sleep} hours**.")
+            elif "average_sleep_hours" in first_item:
+                avg_sleep = round(float(first_item["average_sleep_hours"]), 2)
+                tip = " (below 7–9h guideline)." if avg_sleep < 7 else (" (above typical 7–9h guideline)." if avg_sleep > 9 else "")
+                context.append(f"😴 **Average Sleep**: **{avg_sleep} h/night**{tip}")
+            elif "min_sleep_hours" in first_item:
+                context.append(f"😴 **Shortest Sleep**: **{float(first_item['min_sleep_hours']):.2f} h**.")
+            elif "max_sleep_hours" in first_item:
+                context.append(f"😴 **Longest Sleep**: **{float(first_item['max_sleep_hours']):.2f} h**.")
+
+            # ---------------- SLEEP (MINUTES) — YOUR CASE ----------------
+            elif "average_sleep" in first_item or "total_sleep" in first_item or "min_sleep" in first_item or "max_sleep" in first_item:
+                total_min = first_item.get("total_sleep")
+                avg_min = first_item.get("average_sleep")
+                min_min = first_item.get("min_sleep")
+                max_min = first_item.get("max_sleep")
+
+                def to_hours(m): 
+                    return None if m is None else float(m)/60.0
+
+                # convert when present
+                total_h = to_hours(total_min)
+                avg_h = to_hours(avg_min)
+                min_h = to_hours(min_min)
+                max_h = to_hours(max_min)
+
+                # Build sentences only for provided stats
+                if total_h is not None:
+                    context.append(f"😴 **Total Sleep**: **{total_h:.2f} h** (converted from minutes).")
+                if avg_h is not None:
+                    tip = " (below 7–9h guideline)." if avg_h < 7 else (" (above typical 7–9h guideline)." if avg_h > 9 else "")
+                    context.append(f"😴 **Average Sleep**: **{avg_h:.2f} h/night**{tip} (converted).")
+                if min_h is not None:
+                    context.append(f"😴 **Shortest Sleep**: **{min_h:.2f} h** (converted).")
+                if max_h is not None:
+                    context.append(f"😴 **Longest Sleep**: **{max_h:.2f} h** (converted).")
+
+            # ---------------- CALORIES ----------------
+            elif "total_calories" in first_item:
+                context.append(f"🔥 **Total Calories**: **{int(round(float(first_item['total_calories']))):,} kcal**.")
+            elif "average_calories" in first_item:
+                context.append(f"🔥 **Average Daily Calories**: **{int(round(float(first_item['average_calories']))):,} kcal/day**.")
+            elif "min_calories" in first_item:
+                context.append(f"🔥 **Lowest Daily Calories**: **{int(round(float(first_item['min_calories']))):,} kcal**.")
+            elif "max_calories" in first_item:
+                context.append(f"🔥 **Highest Daily Calories**: **{int(round(float(first_item['max_calories']))):,} kcal**.")
+
+            # ---------------- SpO₂ ----------------
+            elif "average_spo2" in first_item:
+                avg_spo2 = float(first_item["average_spo2"])
+                flag = " ⚠️ Low average." if avg_spo2 < 95 else ""
+                context.append(f"🫁 **Average SpO₂**: **{avg_spo2:.1f}%**.{flag}")
+            elif "min_spo2" in first_item:
+                context.append(f"🫁 **Lowest SpO₂**: **{float(first_item['min_spo2']):.1f}%**")
+            elif "max_spo2" in first_item:
+                context.append(f"🫁 **Highest SpO₂**: **{float(first_item['max_spo2']):.1f}%**")
+
+            # ---------------- Generic fallback ----------------
+            elif "total_value" in first_item:
+                context.append(f"📊 **Total**: {first_item['total_value']:,}")
+            elif "average_value" in first_item:
+                context.append(f"📊 **Average**: {round(float(first_item['average_value']), 1)}")
+            elif "min_value" in first_item:
+                context.append(f"📊 **Minimum**: {first_item['min_value']}")
+            elif "max_value" in first_item:
+                context.append(f"📊 **Maximum**: {first_item['max_value']}")
+
+
+        # ---- Raw record list (per-sample values) ----
         else:
-            # Handle individual records
-            values = [d["value"] for d in data["health_data"] if "value" in d and isinstance(d["value"], (int, float))]
-            metric = data["health_data"][0].get("metric", "unknown")
-            
+            # Extract numeric values
+            values = [d.get("value") for d in health if isinstance(d.get("value"), (int, float))]
+            raw_metric = health[0].get("metric") or health[0].get("type") or "unknown"
+            metric = normalize_metric(raw_metric)
+
             if values:
-                total = sum(values)
+                total = float(sum(values))
                 avg = total / len(values)
-                min_val = min(values)
-                max_val = max(values)
-                
-                # Group by date for trend analysis
-                date_groups = {}
-                for d in data["health_data"]:
+                min_val = float(min(values))
+                max_val = float(max(values))
+
+                # Group by day for simple 3-day trend
+                date_groups: Dict[str, List[float]] = {}
+                for d in health:
                     ts = d.get("timestamp")
                     if isinstance(ts, datetime):
                         day = ts.strftime("%Y-%m-%d")
-                        date_groups.setdefault(day, []).append(d["value"])
-                
-                # Trend analysis
+                    else:
+                        day = str(ts)[:10]
+                    if isinstance(d.get("value"), (int, float)):
+                        date_groups.setdefault(day, []).append(float(d["value"]))
+
                 trend = ""
                 if len(date_groups) >= 3:
                     sorted_days = sorted(date_groups.items())[-3:]
-                    day_avgs = [sum(vals) / len(vals) for _, vals in sorted_days]
+                    day_avgs = [sum(vals) / max(len(vals), 1) for _, vals in sorted_days]
                     if day_avgs[0] < day_avgs[1] < day_avgs[2]:
                         trend = "📈 You've shown a 3-day improvement trend!"
                     elif day_avgs[0] > day_avgs[1] > day_avgs[2]:
                         trend = "📉 Your recent data suggests a slight decline."
-                
-                # Build summary based on metric type
-                if metric.lower() == "steps":
-                    summary = f"You recorded a total of **{total:,} steps** with {len(values)} readings. Average: {avg:.0f} steps per reading. {trend}"
+
+                # Metric-specific summaries
+                if metric == Metric.STEPS:
+                    summary = (
+                        f"You recorded a total of **{int(round(total)):,} steps** with {len(values)} readings. "
+                        f"Average: {avg:.0f} steps per reading. {trend}"
+                    )
                     if total >= 10000:
                         summary += " 🎉 Excellent! You hit the 10,000+ steps goal!"
                     elif total >= 7000:
                         summary += " 👍 Great job staying active!"
                     else:
-                        summary += " 💪 Every step counts - keep it up!"
-                elif metric.lower() in ["heartrate", "heart_rate"]:
-                    summary = f"Heart rate readings: Average {avg:.0f} bpm, Range: {min_val}-{max_val} bpm. {trend}"
+                        summary += " 💪 Every step counts — keep it up!"
+                    context.append(f"📊 **Steps Summary**: {summary}")
+
+                elif metric == Metric.HEART_RATE:
+                    summary = f"Average **{avg:.0f} bpm**, range **{min_val:.0f}-{max_val:.0f} bpm**. {trend}"
+                    context.append(f"💓 **Heart Rate Summary**: {summary}")
+
+                elif metric == Metric.SPO2:
+                    flag = ""
+                    if avg < 95 or min_val < 90:
+                        flag = " ⚠️ Consider following up if low values persist."
+                    summary = f"Average **{avg:.1f}%**, range **{min_val:.1f}–{max_val:.1f}%**.{flag} {trend}"
+                    context.append(f"🫁 **SpO₂ Summary**: {summary}")
+
+                elif metric == Metric.SLEEP:
+                    # Assume hours; if max suggests minutes (e.g., >24), convert
+                    converted = False
+                    if max_val > 24:
+                        values_h = [v / 60.0 for v in values]
+                        total = sum(values_h)
+                        avg = total / len(values_h)
+                        min_val = min(values_h)
+                        max_val = max(values_h)
+                        converted = True
+
+                    tip = ""
+                    if avg < 7:
+                        tip = " (below 7–9h guideline)."
+                    elif avg > 9:
+                        tip = " (above typical 7–9h guideline)."
+
+                    pretty = (
+                        f"Total **{total:.2f} h**, avg **{avg:.2f} h**, "
+                        f"range **{min_val:.2f}–{max_val:.2f} h**. {trend}{tip}"
+                    )
+                    if converted:
+                        pretty += " ⤴️ Converted from minutes → hours."
+                    context.append(f"😴 **Sleep Summary**: {pretty}")
+
+                elif metric == Metric.CALORIES:
+                    summary = (
+                        f"Total **{int(round(total)):,} kcal**, avg **{int(round(avg)):,} kcal/read**. "
+                        f"Range **{int(round(min_val)):,}–{int(round(max_val)):,} kcal**. {trend}"
+                    )
+                    context.append(f"🔥 **Calories Summary**: {summary}")
+
                 else:
-                    summary = f"{metric.title()}: Total {total}, Average {avg:.1f}, Range: {min_val}-{max_val}. {trend}"
-                
-                context.append(f"📊 **{metric.title()} Summary**: {summary}")
-    
-    # Alerts analysis
-    if data["alerts"]:
-        alerts = [
-            f"{d.get('timestamp').strftime('%Y-%m-%d') if isinstance(d.get('timestamp'), datetime) else str(d.get('timestamp'))[:10]}: {d.get('message', '')}"
-            for d in data["alerts"]
-        ]
-        context.append("🚨 **Recent Alerts**:\n" + "\n".join(alerts[:5]))
-    
-    # Journal entries analysis
-    # if data["journal"]:
-    #     entries = [
-    #         f"{d.get('timestamp').strftime('%Y-%m-%d') if isinstance(d.get('timestamp'), datetime) else str(d.get('timestamp'))[:10]} | Sleep: {d.get('sleep', 'N/A')} | Note: {d.get('extra_note', 'N/A')}"
-    #         for d in data["journal"]
-    #     ]
-    #     context.append("📝 **Recent Journal Entries**:\n" + "\n".join(entries[:3]))
+                    summary = f"Total **{total:.1f}**, avg **{avg:.1f}**, range **{min_val:.1f}-{max_val:.1f}**. {trend}"
+                    title = (raw_metric or "unknown").replace("_", " ").title()
+                    context.append(f"📊 **{title} Summary**: {summary}")
 
-    # if data["journal"]:
-    #     tag_map = {
-    #         "food_intake": "Food",
-    #         "sleep": "Sleep",
-    #         "mood": "Mood",
-    #         "meditation": "Meditation",
-    #         "personal": "Personal Note",
-    #         "work_or_study": "Work/Study",
-    #         "extra_note": "Note"
-    #     }
+    # ---------------- Alerts analysis ----------------
+    if data.get("alerts"):
+        alerts = []
+        for d in data["alerts"]:
+            ts = d.get("timestamp")
+            ts_str = ts.strftime("%Y-%m-%d") if isinstance(ts, datetime) else str(ts)[:10]
+            msg = d.get("message", "")
+            alerts.append(f"{ts_str}: {msg}")
+        if alerts:
+            context.append("🚨 **Recent Alerts**:\n" + "\n".join(alerts[:5]))
 
-    #     tag_summary = {}
-
-    #     for entry in data["journal"]:
-    #         tag = entry.get("tag", "unknown")
-    #         readable = tag_map.get(tag, tag.replace("_", " ").title())
-    #         text = entry.get("text", "")
-    #         tag_summary.setdefault(readable, []).append(text)
-
-    #     summary_lines = ["📝 **Today's Journal Summary**:"]
-    #     for tag, notes in tag_summary.items():
-    #         summary_lines.append(f"• {tag}: {' | '.join(notes)}")
-
-    #     context.append("\n".join(summary_lines))
-    
-    # 
+    # ---------------- Journal entries analysis ----------------
     if data.get("journal"):
         tag_map = {
             "food_intake": "Food",
@@ -691,65 +833,257 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
             "meditation": "Meditation",
             "personal": "Personal Note",
             "work_or_study": "Work/Study",
-            "extra_note": "Note"
+            "extra_note": "Note",
         }
 
-        tag_summary = {}
+        tag_summary: Dict[str, List[str]] = {}
+        flattened: List[Dict[str, Any]] = []
 
-        # ✅ Flatten entries from each document
-        flattened_entries = []
         for doc in data["journal"]:
-            if "entries" in doc and isinstance(doc["entries"], list):
-                flattened_entries.extend(doc["entries"])
+            if isinstance(doc, dict) and isinstance(doc.get("entries"), list):
+                flattened.extend(doc["entries"])
             else:
-                flattened_entries.append(doc)
+                flattened.append(doc)
 
-        for entry in flattened_entries:
-            if "tag" in entry and "text" in entry:
-                tag = entry.get("tag", "unknown")
-                text = entry.get("text", "")
+        for entry in flattened:
+            if isinstance(entry, dict):
+                if "tag" in entry and "text" in entry:
+                    tag = entry.get("tag", "unknown")
+                    text = entry.get("text", "")
+                else:
+                    possible_tag = next((key for key in entry if key in tag_map), None)
+                    if not possible_tag:
+                        continue
+                    tag = possible_tag
+                    text = entry.get(tag, "")
             else:
-                possible_tag = next((key for key in entry if key in tag_map), None)
-                if not possible_tag:
-                    continue
-                tag = possible_tag
-                text = entry.get(tag, "")
+                continue
 
             readable = tag_map.get(tag, tag.replace("_", " ").title())
             tag_summary.setdefault(readable, []).append(text)
 
         if tag_summary:
-            summary_lines = ["📝 **Journal Summary**:"]
+            lines = ["📝 **Journal Summary**:"]
             for tag, notes in tag_summary.items():
-                # summary_lines.append(f"• {tag}: {' | '.join(notes)}")
-                for line in notes:
-                    summary_lines.append(f"• {tag}: {line}")
-            context.append("\n".join(summary_lines))
+                lines.append(f"• {tag}: {' | '.join(notes)}")
+            context.append("\n".join(lines))
 
-
-
-    # Notifications analysis
-
-    # if data.get("user_notifications"):
-    if "user_notifications" in data and isinstance(data["user_notifications"], list):
-
+    # ---------------- Notifications analysis ----------------
+    if isinstance(data.get("user_notifications"), list):
         unread = [n for n in data["user_notifications"] if not n.get("read", True)]
         if unread:
-            summary = [
-                f"{n.get('timestamp').strftime('%Y-%m-%d') if isinstance(n.get('timestamp'), datetime) else str(n.get('timestamp'))[:10]} - {n.get('body', '[No message]')}"
-                for n in unread[:5]
-            ]
-            context.append("🔔 **Unread Notifications**:\n" + "\n".join(summary))
-    # if data.get("user_notifications"):
-    #     unread = [n for n in data["user_notifications"] if not n.get("read", True)]
-    #     if unread:
-    #         summary = [
-    #             f"{n['timestamp'].strftime('%Y-%m-%d') if isinstance(n['timestamp'], datetime) else str(n['timestamp'])[:10]} - {n['message']}"
-    #             for n in unread[:5]
-    #         ]
-    #         context.append("🔔 **Unread Notifications**:\n" + "\n".join(summary))
-    
+            lines = []
+            for n in unread[:5]:
+                ts = n.get("timestamp")
+                ts_str = ts.strftime("%Y-%m-%d") if isinstance(ts, datetime) else str(ts)[:10]
+                body = n.get("body", "[No message]")
+                lines.append(f"{ts_str} - {body}")
+            context.append("🔔 **Unread Notifications**:\n" + "\n".join(lines))
+
     return "\n\n".join(context) if context else "No recent data available for your query."
+
+
+# def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
+#     """Build comprehensive context from fetched data"""
+#     context = []
+    
+#     # Health data analysis
+#     if data["health_data"]:
+#         # Check if it's aggregation result (like total steps)
+#         first_item = data["health_data"][0]
+        
+#         if isinstance(first_item, dict) and any(key in first_item for key in ['total_steps', 'total_value', 'average_value', 'average_heartrate', 'min_value', 'max_value', 'min_heartrate', 'max_heartrate']):
+#             # Handle aggregation results
+#             if 'total_steps' in first_item:
+#                 total = first_item['total_steps']
+#                 context.append(f"📊 **Total Steps**: You walked **{total:,} steps** during the requested period! 🚶‍♀️")
+                
+#             elif 'average_heartrate' in first_item:
+#                 avg = round(first_item['average_heartrate'], 1)
+#                 context.append(f"💓 **Average Heart Rate**: Your average heart rate was **{avg} bpm** during the requested period!")
+#                 if avg < 60:
+#                     context.append("📘 This is considered bradycardia (slow heart rate). Consider consulting a healthcare professional if you experience symptoms.")
+#                 elif avg > 100:
+#                     context.append("📘 This is considered tachycardia (fast heart rate). Consider consulting a healthcare professional if you experience symptoms.")
+#                 else:
+#                     context.append("✅ This is within the normal resting heart rate range (60-100 bpm).")
+                    
+#             elif 'max_heartrate' in first_item:
+#                 max_hr = first_item['max_heartrate','highest','high']
+#                 context.append(f"📈 **Maximum Heart Rate**: Your peak heart rate was **{max_hr} bpm** during the requested period!")
+                
+#             elif 'min_heartrate' in first_item:
+#                 min_hr = first_item['min_heartrate','lowest','low']
+#                 context.append(f"📉 **Minimum Heart Rate**: Your lowest heart rate was **{min_hr} bpm** during the requested period!")
+                
+#             elif 'total_value' in first_item:
+#                 total = first_item['total_value']
+#                 context.append(f"📊 **Total**: {total:,}")
+                
+#             elif 'average_value' in first_item:
+#                 avg = round(first_item['average_value'], 1)
+#                 context.append(f"📊 **Average**: {avg}")
+                
+#             elif 'min_value' in first_item:
+#                 min_val = first_item['min_value']
+#                 context.append(f"📊 **Minimum**: {min_val}")
+                
+#             elif 'max_value' in first_item:
+#                 max_val = first_item['max_value']
+#                 context.append(f"📊 **Maximum**: {max_val}")
+                
+#         else:
+#             # Handle individual records
+#             values = [d["value"] for d in data["health_data"] if "value" in d and isinstance(d["value"], (int, float))]
+#             metric = data["health_data"][0].get("metric", "unknown")
+            
+#             if values:
+#                 total = sum(values)
+#                 avg = total / len(values)
+#                 min_val = min(values)
+#                 max_val = max(values)
+                
+#                 # Group by date for trend analysis
+#                 date_groups = {}
+#                 for d in data["health_data"]:
+#                     ts = d.get("timestamp")
+#                     if isinstance(ts, datetime):
+#                         day = ts.strftime("%Y-%m-%d")
+#                         date_groups.setdefault(day, []).append(d["value"])
+                
+#                 # Trend analysis
+#                 trend = ""
+#                 if len(date_groups) >= 3:
+#                     sorted_days = sorted(date_groups.items())[-3:]
+#                     day_avgs = [sum(vals) / len(vals) for _, vals in sorted_days]
+#                     if day_avgs[0] < day_avgs[1] < day_avgs[2]:
+#                         trend = "📈 You've shown a 3-day improvement trend!"
+#                     elif day_avgs[0] > day_avgs[1] > day_avgs[2]:
+#                         trend = "📉 Your recent data suggests a slight decline."
+                
+#                 # Build summary based on metric type
+#                 if metric.lower() == "steps":
+#                     summary = f"You recorded a total of **{total:,} steps** with {len(values)} readings. Average: {avg:.0f} steps per reading. {trend}"
+#                     if total >= 10000:
+#                         summary += " 🎉 Excellent! You hit the 10,000+ steps goal!"
+#                     elif total >= 7000:
+#                         summary += " 👍 Great job staying active!"
+#                     else:
+#                         summary += " 💪 Every step counts - keep it up!"
+#                 elif metric.lower() in ["heartrate", "heart_rate"]:
+#                     summary = f"Heart rate readings: Average {avg:.0f} bpm, Range: {min_val}-{max_val} bpm. {trend}"
+#                 else:
+#                     summary = f"{metric.title()}: Total {total}, Average {avg:.1f}, Range: {min_val}-{max_val}. {trend}"
+                
+#                 context.append(f"📊 **{metric.title()} Summary**: {summary}")
+    
+#     # Alerts analysis
+#     if data["alerts"]:
+#         alerts = [
+#             f"{d.get('timestamp').strftime('%Y-%m-%d') if isinstance(d.get('timestamp'), datetime) else str(d.get('timestamp'))[:10]}: {d.get('message', '')}"
+#             for d in data["alerts"]
+#         ]
+#         context.append("🚨 **Recent Alerts**:\n" + "\n".join(alerts[:5]))
+    
+#     # Journal entries analysis
+#     # if data["journal"]:
+#     #     entries = [
+#     #         f"{d.get('timestamp').strftime('%Y-%m-%d') if isinstance(d.get('timestamp'), datetime) else str(d.get('timestamp'))[:10]} | Sleep: {d.get('sleep', 'N/A')} | Note: {d.get('extra_note', 'N/A')}"
+#     #         for d in data["journal"]
+#     #     ]
+#     #     context.append("📝 **Recent Journal Entries**:\n" + "\n".join(entries[:3]))
+
+#     # if data["journal"]:
+#     #     tag_map = {
+#     #         "food_intake": "Food",
+#     #         "sleep": "Sleep",
+#     #         "mood": "Mood",
+#     #         "meditation": "Meditation",
+#     #         "personal": "Personal Note",
+#     #         "work_or_study": "Work/Study",
+#     #         "extra_note": "Note"
+#     #     }
+
+#     #     tag_summary = {}
+
+#     #     for entry in data["journal"]:
+#     #         tag = entry.get("tag", "unknown")
+#     #         readable = tag_map.get(tag, tag.replace("_", " ").title())
+#     #         text = entry.get("text", "")
+#     #         tag_summary.setdefault(readable, []).append(text)
+
+#     #     summary_lines = ["📝 **Today's Journal Summary**:"]
+#     #     for tag, notes in tag_summary.items():
+#     #         summary_lines.append(f"• {tag}: {' | '.join(notes)}")
+
+#     #     context.append("\n".join(summary_lines))
+    
+#     # 
+#     if data.get("journal"):
+#         tag_map = {
+#             "food_intake": "Food",
+#             "sleep": "Sleep",
+#             "mood": "Mood",
+#             "meditation": "Meditation",
+#             "personal": "Personal Note",
+#             "work_or_study": "Work/Study",
+#             "extra_note": "Note"
+#         }
+
+#         tag_summary = {}
+
+#         # ✅ Flatten entries from each document
+#         flattened_entries = []
+#         for doc in data["journal"]:
+#             if "entries" in doc and isinstance(doc["entries"], list):
+#                 flattened_entries.extend(doc["entries"])
+#             else:
+#                 flattened_entries.append(doc)
+
+#         for entry in flattened_entries:
+#             if "tag" in entry and "text" in entry:
+#                 tag = entry.get("tag", "unknown")
+#                 text = entry.get("text", "")
+#             else:
+#                 possible_tag = next((key for key in entry if key in tag_map), None)
+#                 if not possible_tag:
+#                     continue
+#                 tag = possible_tag
+#                 text = entry.get(tag, "")
+
+#             readable = tag_map.get(tag, tag.replace("_", " ").title())
+#             tag_summary.setdefault(readable, []).append(text)
+
+#         if tag_summary:
+#             summary_lines = ["📝 **Journal Summary**:"]
+#             for tag, notes in tag_summary.items():
+#                 summary_lines.append(f"• {tag}: {' | '.join(notes)}")
+#             context.append("\n".join(summary_lines))
+
+
+
+#     # Notifications analysis
+
+#     # if data.get("user_notifications"):
+#     if "user_notifications" in data and isinstance(data["user_notifications"], list):
+
+#         unread = [n for n in data["user_notifications"] if not n.get("read", True)]
+#         if unread:
+#             summary = [
+#                 f"{n.get('timestamp').strftime('%Y-%m-%d') if isinstance(n.get('timestamp'), datetime) else str(n.get('timestamp'))[:10]} - {n.get('body', '[No message]')}"
+#                 for n in unread[:5]
+#             ]
+#             context.append("🔔 **Unread Notifications**:\n" + "\n".join(summary))
+#     # if data.get("user_notifications"):
+#     #     unread = [n for n in data["user_notifications"] if not n.get("read", True)]
+#     #     if unread:
+#     #         summary = [
+#     #             f"{n['timestamp'].strftime('%Y-%m-%d') if isinstance(n['timestamp'], datetime) else str(n['timestamp'])[:10]} - {n['message']}"
+#     #             for n in unread[:5]
+#     #         ]
+#     #         context.append("🔔 **Unread Notifications**:\n" + "\n".join(summary))
+    
+#     return "\n\n".join(context) if context else "No recent data available for your query."
 
 
 
