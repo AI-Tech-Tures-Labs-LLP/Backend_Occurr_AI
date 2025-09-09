@@ -3,6 +3,7 @@ from fastapi import APIRouter
 # from .auth import router as auth_router
 from app.api.v2 import chatbot, journal,notification,settings,health_data,adv_chat,op_chat,task_api
 from app.api.v2 import breathing_exercise_api
+from app.api.v2.dataconformation import router as data_conformation_router
 
 router = APIRouter()
 # router.include_router(user.router, prefix='/users', tags=['Users'])
@@ -17,3 +18,4 @@ router.include_router(adv_chat.router, prefix="/adv_chat",tags=["Advanced Chatbo
 router.include_router(op_chat.router, prefix="/op_chat",tags=["Optimized Advanced Chatbot (v2)"])
 router.include_router(breathing_exercise_api.router, prefix="/breathing_exercise", tags=["Breathing Exercise (v2)"])
 router.include_router(task_api.router,prefix="/task",tags=["Tasks Operations"])
+router.include_router(data_conformation_router, prefix="/data_conformation", tags=["Data Conformation"])
