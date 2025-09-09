@@ -415,25 +415,52 @@ def complete_task(username: str, task_id: str, task_content: Optional[str] = Non
         ]
         conv_count += 1
     # Optional: handle meal image
-    if task["type"] in ["meal", "snack","breakfast","lunch","dinner"] and image_url:
+    # if task["type"] in ["meal", "snack","breakfast","lunch","dinner"] and image_url:
+    #     try:
+    #         vision_response = client.chat.completions.create(
+    #             model="gpt-4",  # Ensure the model is valid
+    #             messages=[
+    #                 {"role": "system", "content": "You're a nutrition assistant. Estimate calories and food details from image."},
+    #                 {"role": "user", "content": [
+    #                     {"type": "text", "text": "What can you tell me about this meal?"},
+    #                     {"type": "image_url", "image_url": image_url}
+    #                 ]}
+    #             ],
+    #             max_tokens=100
+    #         )
+    #         vision_info = vision_response.choices[0].message.content.strip()
+    #         entries.append({"role": "assistant", "content": vision_info, "timestamp": now})
+    #     except Exception as e:
+    #         print("GPT vision error:", e)
+    #         entries.append({"role": "assistant", "content": "Error processing image.", "timestamp": now})
+
+    if task["type"] in ["meal", "snack", "breakfast", "lunch", "dinner"] and image_url:
         try:
             vision_response = client.chat.completions.create(
-                model="gpt-4",  # Ensure the model is valid
+                model="gpt-4.1-mini",   # 👈 or another Groq vision-enabled model
                 messages=[
-                    {"role": "system", "content": "You're a nutrition assistant. Estimate calories and food details from image."},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": "What can you tell me about this meal?"},
-                        {"type": "image_url", "image_url": image_url}
-                    ]}
+                    {
+                        "role": "system",
+                        "content": "You are a nutrition assistant. Analyze the meal image and estimate calories, protein, carbs, fats, and portion details."
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What can you tell me about this meal?"},
+                            {"type": "image_url", "image_url": {"url": image_url}}
+                        ]
+                    }
                 ],
-                max_tokens=100
+                max_tokens=300,
+                temperature=0.6
             )
+
             vision_info = vision_response.choices[0].message.content.strip()
             entries.append({"role": "assistant", "content": vision_info, "timestamp": now})
+
         except Exception as e:
             print("GPT vision error:", e)
             entries.append({"role": "assistant", "content": "Error processing image.", "timestamp": now})
-
     # Decide if follow-up or complete
     is_complete = conv_count >= MAX_TURNS
     if not is_complete:
@@ -470,10 +497,6 @@ def complete_task(username: str, task_id: str, task_content: Optional[str] = Non
         "assistant_reply": follow_up,
         "completed": is_complete
     }
-
-
-
-
 
 
 
@@ -523,27 +546,7 @@ def check_and_notify_pending_tasks_for_all_users():
 
 
 
-# Send push notification to user and save notification record
-# def send_push_notification(username: str, title: str, body: str, task_id=None, alert_id=None):
-#     user = users_collection.find_one({"username": username}, {"device_token": 1})
 
-#     # Try to send push
-#     if user and "device_token" in user:
-#         token = user["device_token"]
-#         print(f"📲 Sending push notification to {username}: {title} — {body}")
-#         # TODO: Add real FCM/Expo integration here
-#     else:
-#         print(f"⚠️ No device token found for user {username}. Skipping push.")
-
-#     # Always save the notification
-#     save_notification(
-#         username=username,
-#         title=title,
-#         body=body,
-#         read=False,
-#         task_id=task_id,
-#         alert_id=alert_id
-#     )
 
 
 def send_push_notification(username: str, title: str, body: str, task_id=None, alert_id=None):
