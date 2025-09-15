@@ -181,7 +181,7 @@ def extract_metric_value(entry, metric):
     try:
         if metric == "steps":
             return entry["value"] if entry["metric"] == "steps" else 0
-        elif metric == "heartRate":
+        elif metric == "heartrate":
             return entry["value"] if entry["metric"] == "heartrate" else 0
         elif metric == "spo2":
             return entry["value"]  if entry["metric"] == "spo2" else 0
