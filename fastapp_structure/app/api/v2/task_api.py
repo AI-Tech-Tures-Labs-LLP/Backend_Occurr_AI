@@ -12,10 +12,28 @@ from app.core.chatbot_engine import client
 from typing import Optional
 from bson import ObjectId
 from datetime import datetime, time
-from dotenv import load_dotenv
-load_dotenv()
+# from utils.saveimage import save_image_locally
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from typing import Optional
+import os, uuid, mimetypes, boto3
+from app.api.v2.health_data import get_user_anchor_date
+from fastapi.security import OAuth2PasswordBearer   
+
+# ... existing imports ...
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# --- S3 config ---
+S3_BUCKET = os.getenv("AWS_S3_BUCKET")
+S3_REGION = os.getenv("AWS_REGION", "ap-south-1")
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=S3_REGION,
+)
+
 
 
 class TaskRequest(BaseModel):
@@ -35,6 +53,36 @@ class TaskResponse(BaseModel):
     created_at: str  # ISO format datetime string, e.g., "2023-10-01T12:00:00Z"
 
 
+# @router.get("/task/get_tasks")
+# def get_today_tasks(token: str = Depends(oauth2_scheme)):
+#     valid, username = decode_token(token)
+#     if not valid:
+#         raise HTTPException(status_code=401, detail=username)
+
+#     user = users_collection.find_one({"username": username})
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+
+#     # Calculate start and end of today (UTC)
+    
+#     start_of_day = datetime(now.year, now.month, now.day)
+#     end_of_day = start_of_day + timedelta(days=1)
+
+#     # Fetch all tasks scheduled for today without limiting the fields
+#     tasks = list(task_collection.find(
+#         {
+#             "username": username,
+#             "trigger_time": {"$gte": start_of_day, "$lt": end_of_day}
+#         }
+#     ).sort("trigger_time", 1))  # Sort by trigger_time
+
+#     # Convert ObjectId to string for serialization (if needed)
+#     for task in tasks:
+#         task["_id"] = str(task["_id"])
+
+#     return {"tasks": tasks}
+
+
 @router.get("/task/get_tasks")
 def get_today_tasks(token: str = Depends(oauth2_scheme)):
     valid, username = decode_token(token)
@@ -45,25 +93,29 @@ def get_today_tasks(token: str = Depends(oauth2_scheme)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Calculate start and end of today (UTC)
-    now = datetime.utcnow()
-    start_of_day = datetime(now.year, now.month, now.day)
+    # --- Get base date from user_dates collection ---
+    base = get_user_anchor_date(username)  # <-- helper we wrote earlier
+    # Normalize to start/end of that day (UTC)
+    start_of_day = base.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day + timedelta(days=1)
 
-    # Fetch all tasks scheduled for today without limiting the fields
+    # Fetch all tasks scheduled for that "day"
     tasks = list(task_collection.find(
         {
             "username": username,
             "trigger_time": {"$gte": start_of_day, "$lt": end_of_day}
         }
-    ).sort("trigger_time", 1))  # Sort by trigger_time
+    ).sort("trigger_time", 1))
 
-    # Convert ObjectId to string for serialization (if needed)
+    # Convert ObjectId to str for JSON serialization
     for task in tasks:
-        task["_id"] = str(task["_id"])
+        if "_id" in task:
+            task["_id"] = str(task["_id"])
 
-    return {"tasks": tasks}
-
+    return {
+        "anchor_date": base.isoformat(),  # helpful for client
+        "tasks": tasks
+    }
 
 
 
@@ -219,38 +271,178 @@ def get_task_streak(token: str = Depends(oauth2_scheme)):
 
  # adjust as needed
 
+# @router.put("/task/complete_task")
+# def complete_task_with_chat(
+#     task_id: str,
+#     task_content: Optional[str] = None,
+#     image_url: Optional[str] = None,
+#     token: str = Depends(oauth2_scheme)
+# ):
+#     try:
+#         # Decode the JWT token to get user data (username and validation)
+#         valid, username = decode_token(token)
+#         if not valid:
+#             raise HTTPException(status_code=401, detail=username)
+
+#     except Exception as e:
+#         raise HTTPException(status_code=401, detail="Invalid token")
+
+#     # Fetch user from DB based on the username
+#     user = users_collection.find_one({"username": username})
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+
+#     try:
+#         from app.utils.task_helper import complete_task  # <- ensure this points to your updated function
+#         result = complete_task(username=username, task_id=task_id, task_content=task_content, image_url=image_url)
+
+#         if not result:
+#             raise HTTPException(status_code=404, detail="Task not found or already completed")
+        
+#         return {
+#             "status": "success",
+#             "result": result
+#         }
+
+#     except ValueError as e:
+#         raise HTTPException(status_code=400, detail=str(e))
+
+# from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+# # ...other imports...
+
+# @router.put("/task/complete_task")
+# def complete_task_with_chat(
+#     task_id: str = Form(...),
+#     task_content: Optional[str] = Form(None),
+#     image_file: Optional[UploadFile] = File(None),   # <— new (local save)
+#     image_url: Optional[str] = Form(None),           # <— still supported
+#     token: str = Depends(oauth2_scheme)
+# ):
+#     # Auth
+#     try:
+#         valid, username = decode_token(token)
+#         if not valid:
+#             raise HTTPException(status_code=401, detail=username)
+#     except Exception:
+#         raise HTTPException(status_code=401, detail="Invalid token")
+
+#     # User
+#     user = users_collection.find_one({"username": username})
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+
+#     # If file uploaded, save locally and prefer that URL
+#     if image_file:
+#         try:
+#             image_url = save_image_locally(image_file)   # returns http://.../uploads/...
+#         except Exception as e:
+#             raise HTTPException(status_code=400, detail=f"Local save failed: {e}")
+
+#     # Continue to your existing helper (journal + vision)
+#     try:
+#         from app.utils.task_helper import complete_task
+#         result = complete_task(
+#             username=username,
+#             task_id=task_id,
+#             task_content=task_content,
+#             image_url=image_url   # local URL (or provided URL) goes in
+#         )
+#         if not result:
+#             raise HTTPException(status_code=404, detail="Task not found or already completed")
+
+#         return {"status": "success", "result": result}
+#     except ValueError as e:
+#         raise HTTPException(status_code=400, detail=str(e))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# S3 upload version
+# task_api.py
+
+
+def upload_image_to_s3(file: UploadFile, key_prefix: str = "journal/meals/") -> tuple[str, str]:
+    """
+    Uploads an image to S3 without ACLs and returns:
+      (s3_key, presigned_url)
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files are allowed")
+
+    ext = os.path.splitext(file.filename or "")[1] or mimetypes.guess_extension(file.content_type) or ".jpg"
+    key = f"{key_prefix}{uuid.uuid4().hex}{ext}"
+
+    data = file.file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # ✅ no ACL here
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=key,
+        Body=data,
+        ContentType=file.content_type,
+    )
+
+    # generate presigned GET url (default 1h, you can tune ExpiresIn)
+    url = s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": S3_BUCKET, "Key": key},
+        ExpiresIn=3600
+    )
+    return key, url
+
+
 @router.put("/task/complete_task")
 def complete_task_with_chat(
-    task_id: str,
-    task_content: Optional[str] = None,
-    image_url: Optional[str] = None,
+    # NOTE: Use Form/File so Swagger allows multipart
+    task_id: str = Form(...),
+    task_content: str | None = Form(None),
+    # image_file: UploadFile | None = File(None),
+    # image_url: str | None = Form(None),
     token: str = Depends(oauth2_scheme)
 ):
+    # 1) Auth
     try:
-        # Decode the JWT token to get user data (username and validation)
         valid, username = decode_token(token)
         if not valid:
             raise HTTPException(status_code=401, detail=username)
-
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    # Fetch user from DB based on the username
+    # 2) User check
     user = users_collection.find_one({"username": username})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    try:
-        from app.utils.task_helper import complete_task  # <- ensure this points to your updated function
-        result = complete_task(username=username, task_id=task_id, task_content=task_content, image_url=image_url)
+    # 3) If file provided, upload to S3 and prefer that URL
+    # if image_file:
+    #     try:
+    #         s3_key, presigned_url = upload_image_to_s3(image_file)
+    #         image_url = presigned_url   # use this in vision + journal
+    #     except Exception as e:
+    #         raise HTTPException(status_code=400, detail=f"S3 upload failed: {e}")
 
-        if not result:
-            raise HTTPException(status_code=404, detail="Task not found or already completed")
-        
-        return {
-            "status": "success",
-            "result": result
-        }
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    from app.utils.task_helper import complete_task
+    result = complete_task(
+        username=username,
+        task_id=task_id,
+        task_content=task_content,
+        # image_url=image_url
+    )
+    # 4) Continue to your helper (it saves to journal + does vision)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found or already completed")
+    return {"status": "success", "result": result}
+    

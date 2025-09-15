@@ -87,6 +87,13 @@ from dotenv import load_dotenv
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
+import os, textwrap, re
+from openai import OpenAI
+from groq import Groq
+import os, json, math, re, textwrap
+from typing import Any, Dict, List, Optional, Union
+
+client = Groq(api_key=os.getenv("OPENAI_API_KEY"))
 
 load_dotenv()
 
@@ -201,3 +208,246 @@ def prewarm_indexes(base_dir: str, limit: int | None = None) -> int:
     print(f"🔥 Prewarmed {count} FAISS index(es).")
     return count
 
+
+
+
+# to get formated response
+
+def generate_answer_from_context(question: str, kb_snippets: list, model: str = "gpt-4o-mini") -> str:
+    """
+    Create a grounded answer from user question and knowledge base snippets.
+
+    kb_snippets should be a list of dicts like:
+      {"text": "...", "source": "path/or/url", "score": 0.12}
+    """
+
+    if not kb_snippets:
+        return "I couldn’t find enough information in the knowledge base to answer that."
+
+    # Sort snippets by best score
+    sorted_snips = sorted(kb_snippets, key=lambda s: s.get("score", 0.0))
+
+    # Format snippets into a reference block
+    context = ""
+    for i, s in enumerate(sorted_snips, start=1):
+        txt = re.sub(r"\s+", " ", s.get("text", "").strip())
+        src = s.get("source", f"snippet-{i}")
+        context += f"[S{i}] Source: {src}\n{txt}\n\n"
+
+    system_msg = textwrap.dedent("""
+    You are a precise assistant. Use ONLY the provided sources to answer.
+    - Support each claim with inline citations like [S1].
+    - If the sources don't contain the answer, say so.
+    - Be clear and concise.
+    """)
+
+    user_msg = f"QUESTION:\n{question.strip()}\n\nSOURCES:\n{context}"
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        temperature=0.2,
+        max_tokens=600,
+    )
+
+    return resp.choices[0].message.content.strip()
+
+
+
+
+
+
+
+
+MongoLike = Union[str, Dict[str, Any], List[Any]]
+
+def format_mongo_answer_llm(
+    question: str,
+    mongo_result: MongoLike,
+    *,
+    use_llm: bool = True,
+    model: str = "gpt-4o-mini",
+    temperature: float = 0.2,
+    max_tokens: int = 250
+) -> str:
+    """
+    Accepts:
+      - str (already formatted narrative) -> returns as-is
+      - dict (metrics OR summary keys) -> formats nicely
+      - list (of dicts/rows) -> summarizes
+    """
+
+    # 0) Nothing?
+    if mongo_result is None:
+        return "I couldn’t find any data for your request."
+
+    # 1) Already formatted narrative (string) -> pass through
+    if isinstance(mongo_result, str):
+        s = mongo_result.strip()
+        return s if s else "I couldn’t find any data for your request."
+
+    # 2) If list -> collapse/summarize
+    if isinstance(mongo_result, list):
+        if len(mongo_result) == 0:
+            return "I couldn’t find any data for your request."
+        if len(mongo_result) == 1:
+            # recurse on the single item
+            return format_mongo_answer_llm(
+                question, mongo_result[0],
+                use_llm=use_llm, model=model, temperature=temperature, max_tokens=max_tokens
+            )
+        # multiple rows -> LLM summarize or compact bullet list fallback
+        if use_llm and client:
+            data_json = json.dumps({"question": question, "rows": mongo_result}, ensure_ascii=False)
+            system_msg = (
+                "You are a precise assistant. Produce a short, user-friendly answer "
+                "ONLY using the provided JSON rows. If numeric, summarize with clear units."
+            )
+            user_msg = f"Format these rows for the user:\n{data_json}\nReturn only the final answer."
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role":"system","content":system_msg},{"role":"user","content":user_msg}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                ans = (resp.choices[0].message.content or "").strip()
+                if ans:
+                    return ans
+            except Exception:
+                pass
+
+        # fallback compact bullets
+        lines = []
+        for i, row in enumerate(mongo_result[:10], start=1):
+            if isinstance(row, dict):
+                row2 = {k:v for k,v in row.items() if k != "_id"}
+                pretty = ", ".join(f"{k}: {row2[k]}" for k in list(row2)[:4])
+                lines.append(f"- Row {i}: {pretty}")
+            else:
+                lines.append(f"- Row {i}: {row}")
+        more = "" if len(mongo_result) <= 10 else f"\n(+{len(mongo_result)-10} more)"
+        return "Here’s a quick summary:\n" + "\n".join(lines) + more
+
+    # 3) Dict case
+    if isinstance(mongo_result, dict):
+        # remove _id noise
+        doc = {k: v for k, v in mongo_result.items() if k != "_id"}
+
+        if not doc:
+            return "I couldn’t find any data for your request."
+
+        # 3a) If the dict already carries narrative keys → return that content
+        for k in ["personal_context", "summary", "text", "message", "formatted", "answer"]:
+            if k in doc and isinstance(doc[k], str) and doc[k].strip():
+                return doc[k].strip()
+
+        # 3b) Metrics dict → either LLM or deterministic format
+        # Normalize floats (round)
+        norm = {}
+        for k, v in doc.items():
+            if isinstance(v, float):
+                v = round(v) if abs(v - round(v)) < 1e-6 else round(v, 2)
+            norm[k] = v
+
+        # If exactly one metric, try to phrase naturally (deterministic)
+        if len(norm) == 1 and not use_llm:
+            k, v = next(iter(norm.items()))
+            key = k.lower()
+            if any(t in key for t in ["heartrate", "heart_rate", "hr"]):
+                return f"Your average heart rate is {v} bpm."
+            if "spo2" in key:
+                return f"Your average SpO₂ is {v}%."
+            if "steps" in key:
+                try:
+                    return f"You took {int(v):,} steps."
+                except Exception:
+                    return f"You took {v} steps."
+            if "sleep" in key or key.endswith("_hours"):
+                return f"Your total sleep duration is {v} hours."
+            return f"{k.replace('_',' ').capitalize()}: {v}"
+
+        # LLM formatting path for nicer language/units
+        if use_llm and client:
+            # Unit hints
+            unit_hints = {}
+            for k in norm:
+                kl = k.lower()
+                if "heartrate" in kl or "heart_rate" in kl or kl.endswith("_hr") or "bpm" in kl:
+                    unit_hints[k] = "bpm"
+                elif "steps" in kl:
+                    unit_hints[k] = "steps"
+                elif "spo2" in kl:
+                    unit_hints[k] = "%"
+                elif "sleep" in kl or kl.endswith("_hours") or "hour" in kl:
+                    unit_hints[k] = "hours"
+                elif "calorie" in kl or "kcal" in kl:
+                    unit_hints[k] = "kcal"
+
+            payload = json.dumps(
+                {"question": question, "fields": norm, "units": unit_hints},
+                ensure_ascii=False
+            )
+            system_msg = textwrap.dedent("""
+            You are a precise assistant. Answer ONLY using the provided JSON.
+            - Do NOT invent values.
+            - Use 'units' hints (bpm, %, hours, steps, kcal) where relevant.
+            - One field -> short natural sentence.
+            - Multiple fields -> concise readable summary (short lines/bullets).
+            - Keep it friendly and factual. No extra markdown unless bullets.
+            """).strip()
+            user_msg = f"Format this for the user:\n{payload}\nReturn only the final answer."
+
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role":"system","content":system_msg},{"role":"user","content":user_msg}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                ans = (resp.choices[0].message.content or "").strip()
+                if ans:
+                    return ans
+            except Exception:
+                pass
+
+        # deterministic fallback (no LLM or error)
+        if len(norm) == 1:
+            k, v = next(iter(norm.items()))
+            pretty = k.replace("_", " ").capitalize()
+            # quick units
+            u = ""
+            kl = k.lower()
+            if any(t in kl for t in ["heartrate", "heart_rate", "hr"]): u = " bpm"
+            elif "spo2" in kl: u = " %"
+            elif "steps" in kl: u = " steps"
+            elif "sleep" in kl or kl.endswith("_hours"): u = " hours"
+            elif "calorie" in kl or "kcal" in kl: u = " kcal"
+            try:
+                if u.strip() == "steps" and isinstance(v, (int, float)):
+                    v = f"{int(v):,}"
+            except Exception:
+                pass
+            return f"{pretty}: {v}{u}".strip()
+
+        lines = []
+        for k, v in norm.items():
+            pretty = k.replace("_", " ").capitalize()
+            u = ""
+            kl = k.lower()
+            if any(t in kl for t in ["heartrate", "heart_rate", "hr"]): u = " bpm"
+            elif "spo2" in kl: u = " %"
+            elif "steps" in kl:
+                try: v = f"{int(v):,}"
+                except Exception: pass
+                u = " steps"
+            elif "sleep" in kl or kl.endswith("_hours"): u = " hours"
+            elif "calorie" in kl or "kcal" in kl: u = " kcal"
+            lines.append(f"- {pretty}: {v}{u}".strip())
+        return "Here’s what I found:\n" + "\n".join(lines)
+
+    # 4) Unknown type
+    return "I couldn’t interpret the data returned for your request."

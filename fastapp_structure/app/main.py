@@ -20,10 +20,23 @@ from app.utils.task_helper import generate_daily_tasks_from_profile,check_and_no
 from app.utils.optimized_code_rag import prewarm_indexes
 from app.utils.settings_secheduler import check_journal_times
 import os
+
+
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI(title="Smart Assistant API")
 subapp = FastAPI(title="try Sub Mount")
 
 
+
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://127.0.0.1:8000")  # change in prod
+UPLOAD_DIR = os.getenv("LOCAL_UPLOAD_DIR", "uploads")               # relative or absolute
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+app = FastAPI()
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @subapp.get("/sub")
 def read_root():

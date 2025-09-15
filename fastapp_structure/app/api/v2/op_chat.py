@@ -1253,7 +1253,7 @@ from app.api.auth.auth import decode_token
 from app.utils.optimized_code_rag import query_documents, prewarm_indexes
 from app.core.advance_chatbot import apply_personality
 from app.api.v2.adv_chat import *  # get_or_create_conversation, save_message, get_recent_history, extract_date_context, generate_ai_mongo_query_with_fallback, fetch_personal_data, build_comprehensive_context
-
+from app.utils.optimized_code_rag import generate_answer_from_context,format_mongo_answer_llm
 # ---------------- Setup ----------------
 load_dotenv()
 
@@ -1265,8 +1265,8 @@ FAISS_FOLDER_PATH = os.path.abspath(
 )
 
 client = Groq(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_API_BASE_URL")
+    api_key=os.getenv("OPENAI_API_KEY")
+    # base_url=os.getenv("OPENAI_API_BASE_URL")
 )
 llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
@@ -1317,6 +1317,7 @@ class ChatResponse(BaseModel):
 # ---------------- Constants ----------------
 TAG_COLLECTION_MAP = {
     "heart_rate": "health_data_collection",
+    "heartrate": "health_data_collection",
     "steps": "health_data_collection",
     "sleep": "health_data_collection",
     "spo2": "health_data_collection",
@@ -1476,6 +1477,7 @@ TOPIC_KEYWORDS = {
 }
 TOPIC_COLLECTION = {
     "heart_rate": "health_data_collection",
+    "heartrate": "health_data_collection",
     "steps": "health_data_collection",
     "sleep": "health_data_collection",
     "spo2": "health_data_collection",
@@ -1487,7 +1489,7 @@ TOPIC_COLLECTION = {
     "sleep_journal": "journals_collection",
 }
 PRONOUN_FOLLOWUP = re.compile(
-    r"^(when|where|how|what|was|is|did|does|do|then|and|also|again|so)\b|^(when|where|how|what)\b.*(it|that|this)$",
+    r"^(when|where|how|what|was|is|my|did|does|do|then|and|also|again|so)\b|^(when|where|how|what)\b.*(it|that|this)$",
     re.IGNORECASE
 )
 
@@ -1837,6 +1839,7 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
         )
 
     elif intent == "mongo_query":
+        print("🔄 Searching MongoDB data...")
         used_sources = []
 
         if request.tags:
@@ -1856,15 +1859,18 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
 
                 mongo_query = generate_ai_mongo_query_with_fallback(tg, username, context_info)
                 personal_data = fetch_personal_data(mongo_query, username)
+                # print(f"📦 MongoDB Results for tag '{tg}':\n{json.dumps(personal_data, indent=2, default=str)}")
                 summary = build_comprehensive_context(personal_data, username)
 
                 if summary and "No recent data" not in summary:
-                    all_contexts.append(f"🗂️ **{tg.title()} Summary:**\n{summary}")
+                    # all_contexts.append(f"🗂️ **{tg.title()} Summary:**\n{summary}")
                     used_sources.append(tg)
 
             if all_contexts:
-                context_reply = apply_personality("\n\n".join(all_contexts), "friendly")
+                formated_answer = format_mongo_answer_llm(augmented_user_q, all_contexts)
+                context_reply = apply_personality("\n\n".join(formated_answer), "friendly")
         else:
+            print("No tags provided, using LLM-detected context.")
             context_info = {
                 "date": request.date,
                 "start_date": request.start_date,
@@ -1880,16 +1886,19 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
             print("🔍 Processing MongoDB query with context:", context_info)
 
             mongo_query = generate_ai_mongo_query_with_fallback(augmented_user_q, username, context_info)
-            print(f"🧠 AI Mongo Query:\n{json.dumps(mongo_query, indent=2)}")
+            print(f"🧠 AI Mongo Query: {mongo_query}")
 
             personal_data = fetch_personal_data(mongo_query, username)
-            print(f"📦 MongoDB Results:\n{json.dumps(personal_data, indent=2, default=str)}")
+            # print(f"📦 MongoDB Results: {personal_data}")
 
             personal_context = build_comprehensive_context(personal_data, username)
-            print("Personal_Context:", personal_context)
+            print("Personal_Context:")
 
             if personal_context and personal_context.strip() != "No recent data available for your query.":
-                context_reply = apply_personality(personal_context, "friendly")
+                print("Personal Context:", personal_context)
+                formated_answer = format_mongo_answer_llm(augmented_user_q, personal_context)
+                print("Formatted Answer:", formated_answer)
+                context_reply = apply_personality(formated_answer, "friendly")
             else:
                 context_reply = apply_personality(
                     "I couldn't find any recent data for that. Is your device or tracker synced properly? Let me know if you'd like help troubleshooting. 😊",
@@ -1921,7 +1930,8 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
                     kb_snippets = query_documents(augmented_user_q, index_path)
 
                     if kb_snippets:
-                        context_reply = apply_personality("\n\n".join(kb_snippets), "friendly")
+                        formated_answer = generate_answer_from_context(augmented_user_q, kb_snippets, llm)
+                        context_reply = apply_personality("\n\n".join(formated_answer), "friendly")
                     else:
                         context_reply = raw_reply or "I'm here to help!"
             else:

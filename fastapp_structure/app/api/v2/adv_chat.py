@@ -20,6 +20,7 @@ from app.utils.optimized_code_rag import load_faiss_index,query_documents
 from app.core.advance_chatbot import normalize, apply_personality
 from app.db.notification_model import notifications_collection
 from dotenv import load_dotenv
+from groq import Groq
 
 load_dotenv()
 
@@ -33,9 +34,9 @@ FAISS_FOLDER_PATH = os.path.abspath(
 )
 
 
-client = OpenAIClient(
+client = Groq(
     api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_API_BASE_URL")
+    # base_url=os.getenv("OPENAI_API_BASE_URL")
 )
 llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
@@ -375,7 +376,7 @@ Always filter by username. Use timestamp with "$gte" and "$lt" for date ranges. 
 
 Health metrics mapping:
 - "steps" → metric: "steps"
-- "heart rate", "heartrate", "pulse", "bpm" → metric: "heartRate" 
+- "heart rate", "heartrate", "pulse", "bpm" → metric: "heartrate" 
 - "spo2", "oxygen" → metric: "spo2"
 - "sleep" → metric: "sleep"
 - "calories" → metric: "calories"
@@ -399,7 +400,7 @@ Examples:
 2. Average heart rate:
 {
   "health_data": [
-    {"$match": {"username": "user123", "metric": "heartRate"}},
+    {"$match": {"username": "user123", "metric": "heartrate"}},
     {"$group": {"_id": null, "average_heartrate": {"$avg": "$value"}}}
   ]
 }
@@ -407,7 +408,7 @@ Examples:
 3. Maximum heart rate today:
 {
   "health_data": [
-    {"$match": {"username": "user123", "metric": "heartRate", "timestamp": {"$gte": "2025-06-20T00:00:00.000Z", "$lt": "2025-06-21T00:00:00.000Z"}}},
+    {"$match": {"username": "user123", "metric": "heartrate", "timestamp": {"$gte": "2025-06-20T00:00:00.000Z", "$lt": "2025-06-21T00:00:00.000Z"}}},
     {"$group": {"_id": null, "max_heartrate": {"$max": "$value"}}}
   ]
 }"""
@@ -497,7 +498,7 @@ def fetch_personal_data(queries: Dict, username: str) -> Dict[str, List]:
                     {"username": username},
                     {"_id": 0}
                 ))
-                print(f"✅ Found {len(results[key])} user notifications")
+                # print(f"✅ Found {len(results[key])} user notifications")
 
                     
             elif isinstance(query, list):
@@ -602,6 +603,7 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
     Also summarizes alerts, journal, and notifications.
     """
     context: List[str] = []
+    print(f"🔍 Building context for user: {username} , collection: {data.keys()}")
 
     # ---------------- Health data analysis ----------------
     health = data.get("health_data") or []
@@ -616,7 +618,7 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
                 # existing keys you already had...
                 "total_steps","total_value","average_value",
                 "average_heartrate","min_value","max_value",
-                "min_heartrate","max_heartrate",
+                "min_heartrate","max_heartrate","highest_heartrate","lowest_heartrate",
                 # sleep (hours)
                 "total_sleep_hours","average_sleep_hours","min_sleep_hours","max_sleep_hours",
                 # NEW: sleep (minutes) like your result
@@ -642,9 +644,9 @@ def build_comprehensive_context(data: Dict[str, List], username: str) -> str:
                     context.append("📘 This falls in tachycardia (>100 bpm). If you notice symptoms, consider consulting a professional.")
                 else:
                     context.append("✅ Within typical resting range (60–100 bpm).")
-            elif "max_heartrate" in first_item:
+            elif "max_heartrate" in first_item or "highest_heartrate" in first_item:
                 context.append(f"📈 **Maximum Heart Rate**: **{float(first_item['max_heartrate']):.0f} bpm**.")
-            elif "min_heartrate" in first_item:
+            elif "min_heartrate" in first_item or "lowest_heartrate" in first_item:
                 context.append(f"📉 **Minimum Heart Rate**: **{float(first_item['min_heartrate']):.0f} bpm**.")
 
             # ---------------- SLEEP (HOURS) ----------------
