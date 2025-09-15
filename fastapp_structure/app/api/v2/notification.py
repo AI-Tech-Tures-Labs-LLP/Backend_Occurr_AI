@@ -132,7 +132,7 @@ def save_alert_response(
     # Determine question based on alert metric
     metric = alert.get("metric", "general")
     metric_prompt = {
-        "heartRate": "What might have caused your heart rate to go high?",
+        "heartrate": "What might have caused your heart rate to go high?",
         "spo2": "Why do you think your oxygen levels dropped recently?",
         "steps": "What affected your activity level today?",
         "sleep": "Did anything affect your sleep quality or duration?",

@@ -42,7 +42,7 @@ def should_trigger_prompt(metric, value, timestamp: datetime):
 
 def generate_ai_prompt(metric, value):
     import random
-    if metric == "heartRate":
+    if metric == "heartrate":
         prompts = [
             "Your heart rate spiked. Were you exercising or feeling stressed?",
             "We noticed an unusually high heart rate. Did something trigger it?",
@@ -82,15 +82,7 @@ def create_health_alert(username, metric, value, timestamp):
     res = alert_collection.insert_one(alert_doc)
     alert_id = str(res.inserted_id)
 
-    # notifications_collection.insert_one({
-    #     "username": username,
-    #     "title": f"Health Alert: {metric.capitalize()}",
-    #     "body": prompt,
-    #     "read": False,
-    #     "timestamp": datetime.utcnow().replace(tzinfo=timezone.utc),
-    #     "alert_id": str(alert_collection.inserted_id)
-    # })
-
+ 
     send_push_notification(
         username = username,
         title= f"Health Alert: {metric.capitalize()}",
@@ -122,7 +114,7 @@ def save_health_data(username: str, payload: dict):
         kcal = estimate_calories(steps_diff, duration)
         calories_data[ts_now] = kcal
 
-    for metric in ["steps", "heartRate", "spo2", "sleep"]:
+    for metric in ["steps", "heartate", "spo2", "sleep"]:
         metric_data = payload.get(metric, {})
         for ts, val in metric_data.items():
             ts_dt = datetime.fromisoformat(ts)
@@ -190,7 +182,7 @@ def extract_metric_value(entry, metric):
         if metric == "steps":
             return entry["value"] if entry["metric"] == "steps" else 0
         elif metric == "heartRate":
-            return entry["value"] if entry["metric"] == "heartRate" else 0
+            return entry["value"] if entry["metric"] == "heartrate" else 0
         elif metric == "spo2":
             return entry["value"]  if entry["metric"] == "spo2" else 0
         elif metric == "sleep":
