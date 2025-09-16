@@ -1,3 +1,5 @@
+from __future__ import annotations
+from fastapi import UploadFile
 from app.db.task_model import task_collection,build_task_doc
 from app.db.database import users_collection
 from app.db.journal_model import journals_collection, get_or_create_daily_journal,save_journal_entry
@@ -18,6 +20,33 @@ import os, uuid, base64, mimetypes
 import requests  # <-- add this
 from datetime import datetime, time, timezone
 import boto3
+
+import anyio  # comes via Starlette/AnyIO
+from anyio import from_thread
+
+# from vision_model import 
+import os, io, base64,uuid,json,torch,requests,anyio,mimetypes  
+import streamlit as st
+from PIL import Image
+from openai import OpenAI
+
+# --- Local vision (captioning) ---
+from transformers import pipeline
+
+
+from io import BytesIO
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone, time
+from bson import ObjectId
+from PIL import Image
+
+import torch
+
+
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+
+# ---- Project-specific imports ----
+
  
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEYS"),base_url=os.getenv("OPENAI_API_BASE_URLS"))
@@ -159,26 +188,154 @@ def generate_daily_tasks_from_profile(user):
  
 
 # ==== ENV HELPERS ====
-def get_openai_client() -> OpenAI:
-    key = os.getenv("DEEPSEEK_API_KEY")
-    if not key:
-        raise RuntimeError("DEEPSEEK_API_KEY is required")
-    # return OpenAI(api_key=key)
-    return OpenAI(api_key=key, base_url="https://api.deepseek.com")
-
 def get_groq_client() -> Groq:
-    key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        raise RuntimeError("OPENAI_API_KEY is required")
-    return Groq(api_key=key)
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing OPENAI_API_KEY (or OPENAI_API_KEY)")
+    # DeepSeek exposes OpenAI-compatible API
+    return OpenAI(api_key=api_key)
 
-# ---- prompts ----
+
+def ds_client() -> OpenAI:
+    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing DEEPSEEK_API_KEY (or OPENAI_API_KEY)")
+    # DeepSeek exposes OpenAI-compatible API
+    return OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+
+
+
 NUTRITION_SYSTEM_PROMPT = (
-    "You are an expert nutritionist. Look carefully at the food items in the image "
-    "and estimate total calories. List each item with an estimated calorie count in this format:\n"
-    "1. Item 1 - N calories\n2. Item 2 - N calories\n...\n"
-    "Add a brief note about assumptions/portion sizes."
+  """You are an expert nutritionist. Given a short meal description, estimate total calories.
+List each item with an estimated calorie count in this exact format:
+1. Item 1 - N calories
+2. Item 2 - N calories
+...
+Add a brief note about assumptions/portion sizes.
+Prefer Indian dish names when applicable (e.g., dosa/masala dosa, sambar, coconut chutney)."""
 )
+USER_TEMPLATE = (
+    "Image caption: {caption}\n"
+    "{extra}\n"
+    "Return a short analysis with bullet points for items, a single total kcal estimate, and macros."
+)
+
+def analyze_meal_with_openai(caption: str, extra: str = "", model: str = None) -> str:
+    client = ds_client()
+    prompt = USER_TEMPLATE.format(caption=caption.strip(), extra=(extra.strip() or ""))
+    resp = client.chat.completions.create(
+        model=model or os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": NUTRITION_SYSTEM_PROMPT},
+            {"role": "user",   "content": prompt},
+        ],
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+# ---------------- HF Captioning (BLIP) ----------------
+_DATA_URL_RE = re.compile(r"^data:(?P<mime>[\w/+.-]+);base64,(?P<b64>.+)$", re.I)
+_CAPTIONER = None  # cached pipeline
+
+def to_pil_image(image_input: Any) -> Image.Image:
+    """Coerce UploadFile / bytes / data-url / http(s) url / local path / PIL.Image -> PIL.Image (RGB)."""
+    if isinstance(image_input, Image.Image):
+        return image_input.convert("RGB")
+
+    # Starlette UploadFile or file-like with .file
+    if hasattr(image_input, "file"):
+        try:
+            image_input.file.seek(0)
+        except Exception:
+            pass
+        return Image.open(image_input.file).convert("RGB")
+
+    # Raw bytes
+    if isinstance(image_input, (bytes, bytearray)):
+        return Image.open(BytesIO(image_input)).convert("RGB")
+
+    # String inputs
+    if isinstance(image_input, str):
+        m = _DATA_URL_RE.match(image_input)
+        if m:
+            raw = base64.b64decode(m.group("b64"))
+            return Image.open(BytesIO(raw)).convert("RGB")
+        if image_input.startswith(("http://", "https://")):
+            r = requests.get(image_input, timeout=30)
+            r.raise_for_status()
+            return Image.open(BytesIO(r.content)).convert("RGB")
+        # assume filesystem path
+        return Image.open(image_input).convert("RGB")
+
+    raise ValueError("Unsupported image input type; provide URL/path/bytes/base64/PIL/UploadFile")
+
+def get_captioner():
+    global _CAPTIONER
+    if _CAPTIONER is None:
+        device = 0 if torch.cuda.is_available() else -1
+        _CAPTIONER = pipeline(
+            "image-to-text",
+            model="Salesforce/blip-image-captioning-base",
+            device=device,
+        )
+    return _CAPTIONER
+
+def caption_image(image_input: Any) -> str:
+    img = to_pil_image(image_input)
+    cap = get_captioner()(img)[0]["generated_text"].strip()
+    return cap
+
+def analyze_meal(image_input: Any, *, extra: str = "") -> str:
+    """
+    image_input can be UploadFile / URL / data-URL / bytes / path / PIL.Image
+    Returns the nutrition analysis string (DeepSeek).
+    """
+    cap = caption_image(image_input)
+    return analyze_meal_with_openai(
+        caption=cap,
+        extra=extra or "Estimate total calories and macros. If uncertain, say so briefly.",
+    )
+
+# ---------------- S3 Upload (async) ----------------
+async def upload_image_to_s3(
+    image_file: UploadFile,
+    bucket: str,
+    key_prefix: str = "journal",
+    region: str | None = None,
+    public_base: str | None = None,
+    presign_ttl: int = 7 * 24 * 3600,
+) -> str:
+    """
+    Reads UploadFile (await .read()), uploads bytes to S3 without ACLs, and returns:
+      - clean public URL if public_base is provided (assumes bucket policy/CF handles public read)
+      - else presigned GET URL valid for presign_ttl seconds
+    """
+    if not image_file:
+        raise ValueError("image_file is required")
+
+    data = await image_file.read()
+    mime = (image_file.content_type or "application/octet-stream").split(";")[0].strip()
+    ext = mimetypes.guess_extension(mime) or ".jpg"
+    key = f"{key_prefix}/{datetime.now(timezone.utc).strftime('%Y/%m/%d')}/{uuid.uuid4().hex}{ext}"
+
+    s3 = boto3.client("s3", region_name=region)
+
+    def _put():
+        s3.put_object(Bucket=bucket, Key=key, Body=data, ContentType=mime)
+
+    # boto3 is blocking -> run in thread
+    await anyio.to_thread.run_sync(_put)
+
+    if public_base:
+        return f"{public_base.rstrip('/')}/{key}"
+
+    # Presigned URL
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=presign_ttl,
+    )
+
 
 JOURNAL_FOLLOWUP_SYS = (
     "You are a friendly journaling assistant.\n"
@@ -188,84 +345,7 @@ JOURNAL_FOLLOWUP_SYS = (
 )
 
 # ---- helpers (paste once in your module) ----
-def _bytes_from_image_url(image_url: str) -> tuple[bytes, str]:
-    """Supports https:// and data: URLs."""
-    if image_url.startswith("data:"):
-        header, b64data = image_url.split(",", 1)
-        # e.g. data:image/png;base64,...
-        mime = header.split(";")[0].split("data:")[1] or "image/png"
-        return base64.b64decode(b64data), mime
-    resp = requests.get(image_url, timeout=30)
-    resp.raise_for_status()
-    mime = resp.headers.get("content-type", "image/jpeg")
-    return resp.content, mime
 
-def upload_image_to_s3(
-    image_url: str,
-    *,
-    bucket: str,
-    key_prefix: str = "journal",
-    region: str | None = None,
-    public_base: str | None = None,   # okay to keep; just won’t use ACLs
-    presign_ttl: int = 7 * 24 * 3600, # 7 days
-) -> str:
-    # fetch bytes (supports https:// and data: URLs)
-    if image_url.startswith("data:"):
-        header, b64data = image_url.split(",", 1)
-        mime = header.split(";")[0].split("data:")[1] or "image/png"
-        data = base64.b64decode(b64data)
-    else:
-        r = requests.get(image_url, timeout=30)
-        r.raise_for_status()
-        data = r.content
-        mime = r.headers.get("content-type", "image/jpeg")
-
-    ext = mimetypes.guess_extension(mime) or ".jpg"
-    key = f"{key_prefix}/{datetime.now(timezone.utc).strftime('%Y/%m/%d')}/{uuid.uuid4().hex}{ext}"
-
-    s3 = boto3.client("s3", region_name=region)
-
-    # IMPORTANT: no ACL here (ACLs are disabled)
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=data,
-        ContentType=mime,
-    )
-
-    # If you’ve configured a bucket policy/CloudFront to allow public reads,
-    # you can still return a clean URL; otherwise use a presigned URL.
-    if public_base:
-        # This will only be publicly readable if your bucket policy allows GetObject.
-        return f"{public_base.rstrip('/')}/{key}"
-
-    return s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket, "Key": key},
-        ExpiresIn=presign_ttl,
-    )
-
-def analyze_meal_with_openai(image_https_url: str,
-                             *,
-                             model: str = "gpt-4o-mini",
-                             extra_text: str = "Analyze this meal." ) -> str:
-    client = get_openai_client()
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=0.3,
-        max_tokens=600,
-        messages=[
-            {"role": "system", "content": NUTRITION_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": extra_text},
-                    {"type": "image_url", "image_url": {"url": image_https_url}},
-                ],
-            },
-        ],
-    )
-    return (resp.choices[0].message.content or "").strip()
 
 # ---- context utils for previous-turn-aware follow-ups ----
 def _normalize_entry_to_text(entry: dict) -> str:
@@ -298,7 +378,7 @@ def complete_task(
     username: str,
     task_id: str,
     task_content: Optional[str] = None,
-    image_url: Optional[str] = None
+    image_file: Optional[Any] = None,
 ):
     """
     Conversation-style task completion that:
@@ -321,7 +401,7 @@ def complete_task(
     # 2) Expiry guard
     expires_at = task.get("expires_at")
     if expires_at and now > expires_at:
-        raise ValueError("Task has expired and cannot be completed.")
+        return("Task has expired and cannot be completed.")
 
     # 3) Breathing: prevent multiple per day
     if task["type"] == "breathing" and task_content is None:
@@ -372,6 +452,7 @@ def complete_task(
 
     # ----- (A) Handle user text (context-aware Groq follow-up) -----
     if task_content:
+        print("Generating Groq follow-up...===========")
         try:
             groq_client = get_groq_client()
             journal_doc = journals_collection.find_one({"_id": journal_id}, {"entries": 1}) or {"entries": []}
@@ -397,55 +478,65 @@ def complete_task(
         conv_count += 1
 
     # ----- (B) Handle meal image (S3 + OpenAI Vision) -----
-    if task["type"] in ["meal", "snack", "breakfast", "lunch", "dinner"] and image_url:
-        print("Processing meal image for vision analysis...===========")
-        try:
-            # 1) Upload to S3 and get a URL we can store/call with
-            aws_region = os.getenv("AWS_REGION", "ap-south-1")
-            s3_bucket  = os.getenv("AWS_S3_BUCKET")
-            if not s3_bucket:
-                raise RuntimeError("S3_BUCKET env var is required")
-            s3_public_base = os.getenv("S3_PUBLIC_BASE")  # optional
+    if task.get("type") in {"meal", "snack", "breakfast", "lunch", "dinner"} and image_file:
+            print("Processing meal image for vision analysis...===========")
+            try:
+                # 1) Upload to S3 and get a URL we can store/call with
+                aws_region = os.getenv("AWS_REGION", "ap-south-1")
+                s3_bucket  = os.getenv("AWS_S3_BUCKET")
+                if not s3_bucket:
+                    raise RuntimeError("S3_BUCKET env var is required")
+                s3_public_base = os.getenv("S3_PUBLIC_BASE")  # optional
 
-            s3_url = upload_image_to_s3(
-                image_url,
-                bucket=s3_bucket,
-                key_prefix="journal",
-                region=aws_region,
-                public_base=s3_public_base,
-            )
+                # Bridge to async uploader from sync thread; pass kwargs via lambda
+                from anyio import from_thread
+                s3_url: str = from_thread.run(
+                    lambda: upload_image_to_s3(
+                        image_file=image_file,
+                        bucket=s3_bucket,
+                        key_prefix="journal",
+                        region=aws_region,
+                        public_base=s3_public_base,
+                    )
+                )
+                if not isinstance(s3_url, str) or not s3_url:
+                    raise RuntimeError("Uploader did not return URL string")
 
-            # 2) Attach image to journal entry (user bubble) with the S3 URL
-            entries.append({
-                "role": "user",
-                "content": "Here's my meal photo" if not task_content else "Attached meal photo",
-                "timestamp": now,
-                "attachments": [{"type": "image", "url": s3_url, "timestamp": now}],
-            })
+                # 2) Attach image to journal entry (user bubble)
+                entries.append({
+                    "role": "user",
+                    "content": "Here's my meal photo" if not task_content else "Attached meal photo",
+                    "timestamp": now,
+                    "attachments": [{"type": "image", "url": s3_url, "timestamp": now}],
+                })
 
-            # 3) Vision analysis with OpenAI using the same S3 URL
-            analysis = analyze_meal_with_openai(
-                image_https_url=s3_url,
-                model=os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini"),
-                extra_text="Please analyze this meal for total calories, macros, items, and a brief health tip. If unsure, state assumptions.",
-            )
-            if not analysis:
-                analysis = "I couldn't analyze the image right now."
+                # 3) Caption+analyze using local file (faster; no re-download). Reset pointer in case it moved.
+                try:
+                    image_file.file.seek(0)
+                except Exception:
+                    pass
 
-            entries.append({"role": "assistant", "content": analysis, "timestamp": now})
-            follow_up = (follow_up or analysis)
+                analysis = analyze_meal(
+                    image_input=image_file,
+                    extra="Analyze this meal for items, total kcal, macros (protein, carbs, fat), and one health tip.",
+                )
+                if not analysis:
+                    analysis = "I couldn't analyze the image right now."
 
-        except Exception as e:
-            print("Meal image pipeline error:", e)
-            entries.append({
-                "role": "assistant",
-                "content": "I couldn't process the image. Please send a valid HTTPS or data URL.",
-                "timestamp": now
-            })
+                entries.append({"role": "assistant", "content": analysis, "timestamp": now})
+                follow_up = follow_up or analysis
+
+            except Exception as e:
+                print("Meal image pipeline error:", e)
+                entries.append({
+                    "role": "assistant",
+                    "content": "I couldn't process the image. Please send a valid HTTPS or data URL.",
+                    "timestamp": now
+                })
 
     # ----- (C) If neither text nor image, start chat (context-aware opener) -----
 
-    if not task_content and not image_url:
+    if not task_content and not image_file:
         assistant_msg = f"Can you tell me more about: {task['title']}?"
         entries.append({"role": "assistant", "content": assistant_msg, "timestamp": now})
         task_collection.update_one(
@@ -459,35 +550,6 @@ def complete_task(
             "assistant_reply": assistant_msg,
             "completed": False
         }
-
-    # if not task_content and not image_url:
-    #     try:
-    #         groq_client = get_groq_client()
-    #         journal_doc = journals_collection.find_one({"_id": journal_id}, {"entries": 1}) or {"entries": []}
-    #         ctx_messages = build_context_messages(journal_doc, "Start a helpful check-in.", max_turns=12)
-    #         gresp = groq_client.chat.completions.create(
-    #             model=os.getenv("OPENAI_API_MODEL", "llama-3.1-70b-versatile"),
-    #             messages=ctx_messages,
-    #             max_tokens=64,
-    #             temperature=0.6,
-    #         )
-    #         assistant_msg = (gresp.choices[0].message.content or "").strip() or f"Can you tell me more about: {task['title']}?"
-    #     except Exception:
-    #         assistant_msg = f"Can you tell me more about: {task['title']}?"
-
-    #     entries.append({"role": "assistant", "content": assistant_msg, "timestamp": now})
-    #     task_collection.update_one(
-    #         {"_id": task["_id"]},
-    #         {"$set": {"status": "in_progress", "conv_count": conv_count, "last_prompt": assistant_msg}}
-    #     )
-    #     append_to_journal(entries)
-    #     return {
-    #         "message": "Started chat for task.",
-    #         "journal_id": str(journal_id),
-    #         "assistant_reply": assistant_msg,
-    #         "completed": False
-    #     }
-
     # ----- (D) Persist journal entries accumulated above -----
     append_to_journal(entries)
 
@@ -519,221 +581,9 @@ def complete_task(
         "completed": is_complete
     } 
 
-# def complete_task(
-#     username: str,
-#     task_id: str,
-#     task_content: Optional[str] = None,
-#     image_url: Optional[str] = None
-# ):
-#     """
-#     Conversation-style task completion that:
-#       - Creates/fetches today's 'conversation' journal
-#       - Logs user text (if any) and generates a Groq follow-up
-#       - If a meal task and an image URL is provided: saves photo in journal and runs OpenAI Vision (gpt-4o-mini)
-#       - Updates task conv_count/status and returns assistant reply
-#     """
-#     now = datetime.utcnow()
-#     today = now.date()
-#     start = datetime.combine(today, time.min)
-#     end = datetime.combine(today, time.max)
-
-#     # 1) Fetch the task
-#     task = task_collection.find_one({"_id": ObjectId(task_id), "username": username})
-#     if not task:
-#         raise ValueError("Task not found")
-
-#     # 2) Expiry guard
-#     expires_at = task.get("expires_at")
-#     if expires_at and now > expires_at:
-#         raise ValueError("Task has expired and cannot be completed.")
-
-#     # 3) Breathing: prevent multiple per day
-#     if task["type"] == "breathing" and task_content is None:
-#         already_logged = breathing_collection.find_one({
-#             "username": username,
-#             "timestamp": {"$gte": start, "$lte": end}
-#         })
-#         if already_logged:
-#             return {
-#                 "message": "Breathing already logged today.",
-#                 "journal_id": None,
-#                 "assistant_reply": "No further actions needed.",
-#                 "completed": False
-#             }
-
-#     # 4) Find/create today's journal
-#     journal = journals_collection.find_one({
-#         "username": username,
-#         "type": "conversation",
-#         "timestamp": {"$gte": start, "$lte": end}
-#     })
-
-#     if not journal:
-#         new_journal = {
-#             "username": username,
-#             "type": "conversation",
-#             "timestamp": now,
-#             "entries": [],
-#             "mood": None
-#         }
-#         journal_id = journals_collection.insert_one(new_journal).inserted_id
-#     else:
-#         journal_id = journal["_id"]
-
-#     def append_to_journal(entries_to_add):
-#         if entries_to_add:
-#             journals_collection.update_one(
-#                 {"_id": journal_id},
-#                 {"$push": {"entries": {"$each": entries_to_add}}}
-#             )
-
-#     # ✅ Always initialize
-#     entries: list[dict[str, Any]] = []
-#     follow_up: Optional[str] = None
-#     conv_count = task.get("conv_count", 0)
-#     MAX_TURNS = 4
-
-#     # ----- (A) Handle user text (Groq follow-up) -----
-#     if task_content:
-#         try:
-#             # Use your Groq text model for conversational follow-ups
-#             groq_resp = client.chat.completions.create(
-#                 model=os.getenv("GROQ_TEXT_MODEL", "llama-3.1-70b-versatile"),
-#                 messages=[
-#                     {
-#                         "role": "system",
-#                         "content": (
-#                             "You are a friendly journaling assistant. Based on the user's response, "
-#                             "ask a short helpful question that continues the conversation."
-#                         )
-#                     },
-#                     {"role": "user", "content": task_content}
-#                 ],
-#                 max_tokens=64,
-#                 temperature=0.6,
-#             )
-#             follow_up = (groq_resp.choices[0].message.content or "").strip()
-#             if not follow_up:
-#                 follow_up = "Could you clarify what you meant by that? Can you provide more details?"
-#         except Exception as e:
-#             print("Follow-up GPT error:", e)
-#             follow_up = "Sorry, I didn't catch that. Can you share more about your task?"
-
-#         entries.extend([
-#             {"role": "user", "content": task_content.strip(), "timestamp": now},
-#             {"role": "assistant", "content": follow_up, "timestamp": now},
-#         ])
-#         conv_count += 1
-
-#     # ----- (B) Handle meal image (OpenAI Vision) -----
-#     if task["type"] in ["meal", "snack", "breakfast", "lunch", "dinner"] and image_url:
-#         print("Processing meal image for vision analysis...===========")
-
-#         try:
-#     # Attach image to journal entry (user bubble)
-#             entries.append({
-#                 "role": "user",
-#                 "content": "Here's my meal photo" if not task_content else "Attached meal photo",
-#                 "timestamp": now,
-#                 "attachments": [{"type": "image", "url": image_url, "timestamp": now}]
-#             })
-
-#             # IMPORTANT: call OpenAI (not Groq), with correct model + content array
-#             vresp = openai_client.chat.completions.create(
-#                 model="gpt-4o-mini",  # or "gpt-4o" if you have access
-#                 messages=[
-#                     {
-#                         "role": "system",
-#                         "content": (
-#                             "You are a nutrition assistant. Analyze the meal photo and respond with:\n"
-#                             "- Estimated total calories\n"
-#                             "- Protein/Carbs/Fats (grams)\n"
-#                             "- Main items with portion estimates\n"
-#                             "- One brief health tip or swap\n"
-#                             "If unsure, clearly state assumptions."
-#                         )
-#                     },
-#                     {
-#                         "role": "user",
-#                         "content": [
-#                             {"type": "text", "text": "Please analyze this meal."},
-#                             {"type": "image_url", "image_url": {"url": image_url}}
-#                         ]
-#                     }
-#                 ],
-#                 max_tokens=400,
-#                 temperature=0.5
-#             )
-
-#             analysis = (vresp.choices[0].message.content or "").strip()
-#             if not analysis:
-#                 analysis = "I couldn't analyze the image right now."
-#             entries.append({"role": "assistant", "content": analysis, "timestamp": now})
-
-#             # ensure the API response is surfaced as assistant_reply
-#             follow_up = (follow_up or analysis)
-
-#         except Exception as e:
-#             print("OpenAI vision error:", e)
-#             entries.append({
-#                 "role": "assistant",
-#                 "content": "I couldn't process the image. Please send a valid HTTPS or base64 data URL.",
-#                 "timestamp": now
-#             })
-        
-
-#     # ----- (C) If neither text nor image, start chat -----
-#     if not task_content and not image_url:
-#         assistant_msg = f"Can you tell me more about: {task['title']}?"
-#         entries.append({"role": "assistant", "content": assistant_msg, "timestamp": now})
-#         task_collection.update_one(
-#             {"_id": task["_id"]},
-#             {"$set": {"status": "in_progress", "conv_count": conv_count, "last_prompt": assistant_msg}}
-#         )
-#         append_to_journal(entries)
-#         return {
-#             "message": "Started chat for task.",
-#             "journal_id": str(journal_id),
-#             "assistant_reply": assistant_msg,
-#             "completed": False
-#         }
-
-#     # ----- (D) Persist journal entries accumulated above -----
-#     append_to_journal(entries)
-
-#     # ----- (E) Compute completion + update task -----
-#     is_complete = conv_count >= MAX_TURNS
-#     task_updates: dict[str, Any] = {
-#         "conv_count": conv_count,
-#         "journal_entry_id": str(journal_id),
-#     }
-
-#     if is_complete:
-#         task_updates.update({
-#             "completed": True,
-#             "status": "completed",
-#             "completed_at": now
-#         })
-#     else:
-#         if follow_up:
-#             task_updates.update({"status": "in_progress", "last_prompt": follow_up})
-#         else:
-#             task_updates.update({"status": "in_progress"})
-
-#     task_collection.update_one({"_id": task["_id"]}, {"$set": task_updates})
-
-#     return {
-#         "message": "Task completed!" if is_complete else "Task updated.",
-#         "journal_id": str(journal_id),
-#         "assistant_reply": follow_up or "Noted.",
-#         "completed": is_complete
-#     }
-
  
  
- 
- 
- 
+
  
  
  
@@ -781,28 +631,6 @@ def check_and_notify_pending_tasks_for_all_users():
  
  
  
- 
-# Send push notification to user and save notification record
-# def send_push_notification(username: str, title: str, body: str, task_id=None, alert_id=None):
-#     user = users_collection.find_one({"username": username}, {"device_token": 1})
- 
-#     # Try to send push
-#     if user and "device_token" in user:
-#         token = user["device_token"]
-#         print(f"📲 Sending push notification to {username}: {title} — {body}")
-#         # TODO: Add real FCM/Expo integration here
-#     else:
-#         print(f"⚠️ No device token found for user {username}. Skipping push.")
- 
-#     # Always save the notification
-#     save_notification(
-#         username=username,
-#         title=title,
-#         body=body,
-#         read=False,
-#         task_id=task_id,
-#         alert_id=alert_id
-#     )
  
  
 def send_push_notification(username: str, title: str, body: str, task_id=None, alert_id=None):

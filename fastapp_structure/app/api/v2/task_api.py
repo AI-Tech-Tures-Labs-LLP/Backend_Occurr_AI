@@ -269,92 +269,6 @@ def get_task_streak(token: str = Depends(oauth2_scheme)):
 
 
 
- # adjust as needed
-
-# @router.put("/task/complete_task")
-# def complete_task_with_chat(
-#     task_id: str,
-#     task_content: Optional[str] = None,
-#     image_url: Optional[str] = None,
-#     token: str = Depends(oauth2_scheme)
-# ):
-#     try:
-#         # Decode the JWT token to get user data (username and validation)
-#         valid, username = decode_token(token)
-#         if not valid:
-#             raise HTTPException(status_code=401, detail=username)
-
-#     except Exception as e:
-#         raise HTTPException(status_code=401, detail="Invalid token")
-
-#     # Fetch user from DB based on the username
-#     user = users_collection.find_one({"username": username})
-#     if not user:
-#         raise HTTPException(status_code=404, detail="User not found")
-
-#     try:
-#         from app.utils.task_helper import complete_task  # <- ensure this points to your updated function
-#         result = complete_task(username=username, task_id=task_id, task_content=task_content, image_url=image_url)
-
-#         if not result:
-#             raise HTTPException(status_code=404, detail="Task not found or already completed")
-        
-#         return {
-#             "status": "success",
-#             "result": result
-#         }
-
-#     except ValueError as e:
-#         raise HTTPException(status_code=400, detail=str(e))
-
-# from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-# # ...other imports...
-
-# @router.put("/task/complete_task")
-# def complete_task_with_chat(
-#     task_id: str = Form(...),
-#     task_content: Optional[str] = Form(None),
-#     image_file: Optional[UploadFile] = File(None),   # <— new (local save)
-#     image_url: Optional[str] = Form(None),           # <— still supported
-#     token: str = Depends(oauth2_scheme)
-# ):
-#     # Auth
-#     try:
-#         valid, username = decode_token(token)
-#         if not valid:
-#             raise HTTPException(status_code=401, detail=username)
-#     except Exception:
-#         raise HTTPException(status_code=401, detail="Invalid token")
-
-#     # User
-#     user = users_collection.find_one({"username": username})
-#     if not user:
-#         raise HTTPException(status_code=404, detail="User not found")
-
-#     # If file uploaded, save locally and prefer that URL
-#     if image_file:
-#         try:
-#             image_url = save_image_locally(image_file)   # returns http://.../uploads/...
-#         except Exception as e:
-#             raise HTTPException(status_code=400, detail=f"Local save failed: {e}")
-
-#     # Continue to your existing helper (journal + vision)
-#     try:
-#         from app.utils.task_helper import complete_task
-#         result = complete_task(
-#             username=username,
-#             task_id=task_id,
-#             task_content=task_content,
-#             image_url=image_url   # local URL (or provided URL) goes in
-#         )
-#         if not result:
-#             raise HTTPException(status_code=404, detail="Task not found or already completed")
-
-#         return {"status": "success", "result": result}
-#     except ValueError as e:
-#         raise HTTPException(status_code=400, detail=str(e))
-
-
 
 
 
@@ -404,13 +318,55 @@ def upload_image_to_s3(file: UploadFile, key_prefix: str = "journal/meals/") -> 
     return key, url
 
 
+# @router.put("/task/complete_task")
+# def complete_task_with_chat(
+#     # NOTE: Use Form/File so Swagger allows multipart
+#     task_id: str = Form(...),
+#     task_content: str | None = Form(None),
+#     image_file: UploadFile | None = File(None),
+#     # image_url: str | None = Form(None),
+#     token: str = Depends(oauth2_scheme)
+# ):
+#     # 1) Auth
+#     try:
+#         valid, username = decode_token(token)
+#         if not valid:
+#             raise HTTPException(status_code=401, detail=username)
+#     except Exception:
+#         raise HTTPException(status_code=401, detail="Invalid token")
+
+#     # 2) User check
+#     user = users_collection.find_one({"username": username})
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+
+#     # 3) If file provided, upload to S3 and prefer that URL
+#     # if image_file:
+#     #     try:
+#     #         s3_key, presigned_url = upload_image_to_s3(image_file)
+#     #         image_url = presigned_url   # use this in vision + journal
+#     #     except Exception as e:
+#     #         raise HTTPException(status_code=400, detail=f"S3 upload failed: {e}")
+
+#     from app.utils.task_helper import complete_task
+#     result = complete_task(
+#         username=username,
+#         task_id=task_id,
+#         task_content=task_content,
+#         image_file=image_file,   # pass the file object
+#     )
+#     # 4) Continue to your helper (it saves to journal + does vision)
+#     if not result:
+#         raise HTTPException(status_code=404, detail="Task not found or already completed")
+#     return {"status": "success", "result": result}
+    
+
+
 @router.put("/task/complete_task")
 def complete_task_with_chat(
-    # NOTE: Use Form/File so Swagger allows multipart
     task_id: str = Form(...),
     task_content: str | None = Form(None),
-    # image_file: UploadFile | None = File(None),
-    # image_url: str | None = Form(None),
+    image_file: UploadFile | None = File(None),
     token: str = Depends(oauth2_scheme)
 ):
     # 1) Auth
@@ -426,23 +382,21 @@ def complete_task_with_chat(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # 3) If file provided, upload to S3 and prefer that URL
-    # if image_file:
-    #     try:
-    #         s3_key, presigned_url = upload_image_to_s3(image_file)
-    #         image_url = presigned_url   # use this in vision + journal
-    #     except Exception as e:
-    #         raise HTTPException(status_code=400, detail=f"S3 upload failed: {e}")
+    # 3) Do the work
+    try:
+        result = complete_task(
+            username=username,
+            task_id=task_id,
+            task_content=task_content,
+            image_file=image_file,   # pass the UploadFile
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        # Log and return clean error
+        print("complete_task error:", e)
+        raise HTTPException(status_code=500, detail="Failed to complete task")
 
-    from app.utils.task_helper import complete_task
-    result = complete_task(
-        username=username,
-        task_id=task_id,
-        task_content=task_content,
-        # image_url=image_url
-    )
-    # 4) Continue to your helper (it saves to journal + does vision)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found or already completed")
     return {"status": "success", "result": result}
-    

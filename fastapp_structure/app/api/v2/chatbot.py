@@ -33,34 +33,6 @@ def get_recent_history(username, limit=6):
 
 
 
-# @router.post("/chat")
-# def chat(msg: ChatMessage, token: str = Depends(oauth2_scheme)):
-#     valid, username = decode_token(token)
-#     if not valid:
-#         raise HTTPException(status_code=401, detail=username)
-
-#     history = get_recent_history(username)
-#     bot_response = main(msg.message)
-
-#     save_message(username, "user", msg.message)
-#     save_message(username, "assistant", bot_response)
-
-#     return {"response": bot_response, "history": history + [{"role": "assistant", "content": bot_response}]}
-
-# @router.post("/smart-chat/query")
-# def smart_chat(req: ChatRequest, token: str = Depends(oauth2_scheme)):
-#     valid, username = decode_token(token)
-#     if not valid:
-#         raise HTTPException(status_code=401, detail=username)
-
-#     last_user_msg = next((m for m in reversed(req.messages) if m["role"] == "user"), None)
-#     bot_response = main(last_user_msg["content"] if last_user_msg else "Hello")
-
-#     if last_user_msg:
-#         save_message(username, "user", last_user_msg["content"])
-#     save_message(username, "assistant", bot_response)
-
-#     return {"response": bot_response, "history": get_recent_history(username)}
 
 
 @router.post("/chat")
