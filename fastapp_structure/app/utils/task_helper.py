@@ -189,15 +189,15 @@ def generate_daily_tasks_from_profile(user):
 
 # ==== ENV HELPERS ====
 def get_groq_client() -> Groq:
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY") 
     if not api_key:
         raise RuntimeError("Missing OPENAI_API_KEY (or OPENAI_API_KEY)")
     # DeepSeek exposes OpenAI-compatible API
-    return OpenAI(api_key=api_key)
+    return client(api_key=api_key)
 
 
 def ds_client() -> OpenAI:
-    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("DEEPSEEK_API_KEY") 
     if not api_key:
         raise RuntimeError("Missing DEEPSEEK_API_KEY (or OPENAI_API_KEY)")
     # DeepSeek exposes OpenAI-compatible API
@@ -451,37 +451,10 @@ def complete_task(
     MAX_TURNS = 4
 
     # ----- (A) Handle user text (context-aware Groq follow-up) -----
-    if task_content:
-        print("Generating Groq follow-up...===========")
-        try:
-            groq_client = get_groq_client()
-            journal_doc = journals_collection.find_one({"_id": journal_id}, {"entries": 1}) or {"entries": []}
-            ctx_messages = build_context_messages(journal_doc, task_content, max_turns=12)
-
-            groq_resp = groq_client.chat.completions.create(
-                model=os.getenv("OPENAI_API_KEYS", "llama-3.1-70b-versatile"),
-                messages=ctx_messages,
-                max_tokens=64,
-                temperature=0.6,
-            )
-            follow_up = (groq_resp.choices[0].message.content or "").strip()
-            if not follow_up:
-                follow_up = "Could you clarify that a bit more?"
-        except Exception as e:
-            print("Groq follow-up error:", e)
-            follow_up = "Thanks! Anything else you'd like to add?"
-
-        entries.extend([
-            {"role": "user", "content": task_content.strip(), "timestamp": now},
-            {"role": "assistant", "content": follow_up, "timestamp": now},
-        ])
-        conv_count += 1
-
-    # ----- (B) Handle meal image (S3 + OpenAI Vision) -----
-    if task.get("type") in {"meal", "snack", "breakfast", "lunch", "dinner"} and image_file:
+    if (task.get("type") in {"meal", "snack", "breakfast", "lunch", "dinner"} and image_file and task_content) or (task.get("type") not in {"meal", "snack", "breakfast", "lunch", "dinner"} and image_file ):
             print("Processing meal image for vision analysis...===========")
             try:
-                # 1) Upload to S3 and get a URL we can store/call with
+                # 1) Upload to S3 and get a URL we can store/call withS
                 aws_region = os.getenv("AWS_REGION", "ap-south-1")
                 s3_bucket  = os.getenv("AWS_S3_BUCKET")
                 if not s3_bucket:
@@ -525,6 +498,7 @@ def complete_task(
 
                 entries.append({"role": "assistant", "content": analysis, "timestamp": now})
                 follow_up = follow_up or analysis
+                conv_count += 1
 
             except Exception as e:
                 print("Meal image pipeline error:", e)
@@ -533,7 +507,35 @@ def complete_task(
                     "content": "I couldn't process the image. Please send a valid HTTPS or data URL.",
                     "timestamp": now
                 })
+                follow_up = follow_up or "I couldn't process the image. Please send a valid HTTPS or data URL."
+    if task_content and not image_file:
+        print("Generating Groq follow-up...===========")
+        try:
+            journal_doc = journals_collection.find_one({"_id": journal_id}, {"entries": 1}) or {"entries": []}
+            ctx_messages = build_context_messages(journal_doc, task_content, max_turns=12)
 
+            groq_resp = client.chat.completions.create(
+                model=os.getenv("OPENAI_API_MODEL"),
+                messages=ctx_messages,
+                max_tokens=64,
+                temperature=0,
+            )
+            follow_up = (groq_resp.choices[0].message.content or "").strip()
+            print("Generated Groq follow-up:", follow_up)
+            if not follow_up:
+                follow_up = "Could you clarify that a bit more?"
+        except Exception as e:
+            print("Groq follow-up error:", e)
+            follow_up = "Thanks! Anything else you'd like to add?"
+
+        entries.extend([
+            {"role": "user", "content": task_content.strip(), "timestamp": now},
+            {"role": "assistant", "content": follow_up, "timestamp": now},
+        ])
+        conv_count += 1
+
+    # ----- (B) Handle meal image (S3 + OpenAI Vision) -----
+    
     # ----- (C) If neither text nor image, start chat (context-aware opener) -----
 
     if not task_content and not image_file:
@@ -568,7 +570,7 @@ def complete_task(
         })
     else:
         if follow_up:
-            task_updates.update({"status": "in_progress", "last_prompt": follow_up})
+            task_updates.update({"status": "in_progress", "last_prompt": follow_up,"user_reply": task_content})
         else:
             task_updates.update({"status": "in_progress"})
 
@@ -581,11 +583,7 @@ def complete_task(
         "completed": is_complete
     } 
 
- 
- 
 
- 
- 
  
 # Check and notify pending tasks for all users
  

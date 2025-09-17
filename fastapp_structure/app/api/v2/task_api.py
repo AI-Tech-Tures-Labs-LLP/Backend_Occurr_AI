@@ -286,37 +286,6 @@ def get_task_streak(token: str = Depends(oauth2_scheme)):
 # task_api.py
 
 
-def upload_image_to_s3(file: UploadFile, key_prefix: str = "journal/meals/") -> tuple[str, str]:
-    """
-    Uploads an image to S3 without ACLs and returns:
-      (s3_key, presigned_url)
-    """
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Only image files are allowed")
-
-    ext = os.path.splitext(file.filename or "")[1] or mimetypes.guess_extension(file.content_type) or ".jpg"
-    key = f"{key_prefix}{uuid.uuid4().hex}{ext}"
-
-    data = file.file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
-
-    # ✅ no ACL here
-    s3.put_object(
-        Bucket=S3_BUCKET,
-        Key=key,
-        Body=data,
-        ContentType=file.content_type,
-    )
-
-    # generate presigned GET url (default 1h, you can tune ExpiresIn)
-    url = s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": S3_BUCKET, "Key": key},
-        ExpiresIn=3600
-    )
-    return key, url
-
 
 # @router.put("/task/complete_task")
 # def complete_task_with_chat(
@@ -365,8 +334,8 @@ def upload_image_to_s3(file: UploadFile, key_prefix: str = "journal/meals/") -> 
 @router.put("/task/complete_task")
 def complete_task_with_chat(
     task_id: str = Form(...),
-    task_content: str | None = Form(None),
-    image_file: UploadFile | None = File(None),
+    task_content: Optional[str] = Form(None),
+    image_file: Optional[UploadFile] = File(None),
     token: str = Depends(oauth2_scheme)
 ):
     # 1) Auth
