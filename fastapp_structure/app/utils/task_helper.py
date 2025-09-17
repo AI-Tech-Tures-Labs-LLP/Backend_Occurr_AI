@@ -211,8 +211,7 @@ List each item with an estimated calorie count in this exact format:
 1. Item 1 - N calories
 2. Item 2 - N calories
 ...
-Add a brief note about assumptions/portion sizes.
-Prefer Indian dish names when applicable (e.g., dosa/masala dosa, sambar, coconut chutney)."""
+Add a brief note about assumptions/portion sizes."""
 )
 USER_TEMPLATE = (
     "Image caption: {caption}\n"
@@ -399,9 +398,9 @@ def complete_task(
         raise ValueError("Task not found")
 
     # 2) Expiry guard
-    expires_at = task.get("expires_at")
-    if expires_at and now > expires_at:
-        return("Task has expired and cannot be completed.")
+    # expires_at = task.get("expires_at")
+    # if expires_at and now > expires_at:
+    #     return("Task has expired and cannot be completed.")
 
     # 3) Breathing: prevent multiple per day
     if task["type"] == "breathing" and task_content is None:
