@@ -491,7 +491,7 @@ def complete_task(
 
                 analysis = analyze_meal(
                     image_input=image_file,
-                    extra="Analyze this meal for items, total kcal, macros (protein, carbs, fat), and one health tip.",
+                    extra=f", user_input {task_content} ,Analyze this meal for items, total kcal, macros (protein, carbs, fat), and one health tip .",
                 )
                 if not analysis:
                     analysis = "I couldn't analyze the image right now."
@@ -659,8 +659,7 @@ def send_push_notification(username: str, title: str, body: str, task_id=None, a
         alert_id=alert_id
     )
  
- 
- 
+  
 def get_or_create_daily_journal(username: str):
     today = datetime.utcnow().date()
     journal = journals_collection.find_one({
