@@ -387,15 +387,23 @@ def complete_task(
         and runs OpenAI Vision (gpt-4o-mini) on that S3 URL
       - Updates task conv_count/status and returns assistant reply
     """
-    now = datetime.utcnow()
-    today = now.date()
-    start = datetime.combine(today, time.min)
-    end = datetime.combine(today, time.max)
+    # now = datetime.utcnow()
+    # today = now.date()
+    # start = datetime.combine(today, time.min)
+    # end = datetime.combine(today, time.max)
 
     # 1) Fetch the task
     task = task_collection.find_one({"_id": ObjectId(task_id), "username": username})
     if not task:
         raise ValueError("Task not found")
+    
+
+
+    now = task["created_at"].date()
+    today = now.date()
+    start = datetime.combine(today, time.min)
+    end = datetime.combine(today, time.max)
+
 
     # 2) Expiry guard
     # expires_at = task.get("expires_at")
@@ -507,6 +515,9 @@ def complete_task(
                     "timestamp": now
                 })
                 follow_up = follow_up or "I couldn't process the image. Please send a valid HTTPS or data URL."
+
+
+# ----- (A) Handle user text (context-aware Groq follow-up) -----
     if task_content and not image_file:
         print("Generating Groq follow-up...===========")
         try:
