@@ -40,7 +40,9 @@ async def save_user_date(
         raise HTTPException(status_code=401, detail=username)
 
     date_to_save = entry.date or datetime.utcnow()
-
+    if username in user_dates_collection.distinct("username"):
+        raise HTTPException(status_code=400, detail="Date for this user already exists. Use update instead.")
+    
     doc = {
         "username": username,
         "date": date_to_save,

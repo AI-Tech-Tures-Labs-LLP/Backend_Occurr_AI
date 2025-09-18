@@ -32,7 +32,7 @@ def build_task_doc(
         "type": type,  # 'meal', 'meditation', 'reflection', etc.
         "title": title,
         "trigger_time": trigger_time,
-        "expires_at": expires_at,
+        "expires_at": expires_at,  
         "completed": False,
         "notified": False,
         "completed_at": None,
