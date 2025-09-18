@@ -271,17 +271,6 @@ def get_task_streak(token: str = Depends(oauth2_scheme)):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
 # S3 upload version
 # task_api.py
 
