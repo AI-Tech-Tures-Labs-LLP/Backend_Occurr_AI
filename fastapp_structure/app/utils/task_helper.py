@@ -400,7 +400,7 @@ def complete_task(
 
 
     now = task["created_at"].date()
-    today = now.date()
+    today = now
     start = datetime.combine(today, time.min)
     end = datetime.combine(today, time.max)
 
