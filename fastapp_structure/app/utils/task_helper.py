@@ -18,7 +18,7 @@ from datetime import datetime, time
 from openai import OpenAI
 import os, uuid, base64, mimetypes
 import requests  # <-- add this
-from datetime import datetime, time, timezone
+from datetime import datetime, date, time, timezone
 import boto3
 
 import anyio  # comes via Starlette/AnyIO
@@ -372,6 +372,31 @@ def build_context_messages(journal_doc: dict, new_user_text: str, *, max_turns: 
         msgs.append({"role": "user", "content": new_user_text.strip()})
     return msgs
 
+
+
+def _ensure_datetime_utc(v: Any) -> datetime:
+    """
+    Coerce a value into a timezone-aware UTC datetime.
+    - datetime with tz -> convert to UTC
+    - naive datetime   -> assume UTC
+    - date             -> start of day UTC
+    """
+    if isinstance(v, datetime):
+        return v.astimezone(timezone.utc) if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    if isinstance(v, date):
+        return datetime.combine(v, time.min).replace(tzinfo=timezone.utc)
+    # fallback to "now" if missing/invalid
+    return datetime.now(tz=timezone.utc)
+
+def _day_bounds_utc(dt: datetime) -> tuple[datetime, datetime]:
+    """
+    Given a UTC datetime, return start/end of that (UTC) day as aware datetimes.
+    """
+    dt_utc = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    start = datetime(dt_utc.year, dt_utc.month, dt_utc.day, 0, 0, 0, tzinfo=timezone.utc)
+    end   = datetime(dt_utc.year, dt_utc.month, dt_utc.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    return start, end
+
 # ---- your function (S3 + Vision integrated + context-aware Groq follow-up) ----
 def complete_task(
     username: str,
@@ -398,11 +423,17 @@ def complete_task(
         raise ValueError("Task not found")
     
 
+     # Normalize created_at to aware UTC datetime
+    created_at = _ensure_datetime_utc(task.get("created_at") or datetime.now(tz=timezone.utc))
+    now = created_at  # keep as datetime (NOT .date())
+    start, end = _day_bounds_utc(now)
 
-    now = task["created_at"].date()
-    today = now
-    start = datetime.combine(today, time.min)
-    end = datetime.combine(today, time.max)
+
+
+    # now = task["created_at"].date()
+    # today = now
+    # start = datetime.combine(today, time.min)
+    # end = datetime.combine(today, time.max)
 
 
     # 2) Expiry guard
