@@ -356,7 +356,7 @@ def _normalize_entry_to_text(entry: dict) -> str:
         text = (text + f"\n[attachments present: {', '.join(kinds)}]").strip()
     return text
 
-def build_context_messages(journal_doc: dict, new_user_text: str, *, max_turns: int = 12) -> list[dict]:
+def  build_context_messages(journal_doc: dict, new_user_text: str, *, max_turns: int = 12) -> list[dict]:
     """Build Groq messages from prior journal entries (last `max_turns`) + the new user text."""
     msgs = [{"role": "system", "content": JOURNAL_FOLLOWUP_SYS}]
     entries = (journal_doc or {}).get("entries", [])
