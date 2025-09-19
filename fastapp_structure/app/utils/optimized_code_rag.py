@@ -541,7 +541,7 @@ def format_mongo_answer_llm(
     mongo_result: MongoLike,
     *,
     use_llm: bool = True,
-    model: str = "gpt-4o-mini",
+    model: str = "llama-3.1-8b-instant",
     temperature: float = 0.2,
     max_tokens: int = 250
 ) -> str:
