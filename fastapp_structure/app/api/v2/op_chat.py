@@ -32,7 +32,7 @@ from app.api.auth.auth import decode_token
 from app.utils.optimized_code_rag import query_documents, prewarm_indexes
 from app.core.advance_chatbot import apply_personality
 from app.api.v2.adv_chat import *  # get_or_create_conversation, save_message, get_recent_history, extract_date_context, generate_ai_mongo_query_with_fallback, fetch_personal_data, build_comprehensive_context
-from app.utils.optimized_code_rag import generate_answer_from_context,format_mongo_answer_llm
+from app.utils.optimized_code_rag import generate_answer_from_context,format_mongo_answer_llm,answer_with_kb_then_fallback
 # ---------------- Setup ----------------
 load_dotenv()
 
@@ -709,8 +709,11 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
                     kb_snippets = query_documents(augmented_user_q, index_path)
 
                     if kb_snippets:
-                        formated_answer = generate_answer_from_context(augmented_user_q, kb_snippets, llm)
-                        context_reply = apply_personality("\n\n".join(formated_answer), "friendly")
+                        ctx, reply = answer_with_kb_then_fallback(augmented_user_q, kb_snippets, model="llama-3.3-70b-versatile")
+                        merged = reply if not ctx or ctx.strip() == reply.strip() else f"{ctx}\n\n{reply}"
+                        context_reply = apply_personality(merged, "friendly")
+                        # formated_answer = answer_with_kb_then_fallback(augmented_user_q, kb_snippets, model="llama-3.3-70b-versatile")
+                        # context_reply = apply_personality("\n\n".join(formated_answer), "friendly")
                     else:
                         context_reply = raw_reply or "I'm here to help!"
             else:

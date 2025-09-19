@@ -79,6 +79,17 @@
 #     result = query_documents(query)
 #     print(f"🤖 Answer: {result}")
 
+from __future__ import annotations
+
+import os
+import re
+import json
+import logging
+import textwrap
+from typing import Any, Dict, List, Tuple, Optional
+
+import groq
+from groq import Groq
 
 import os, time
 from functools import lru_cache
@@ -145,18 +156,36 @@ KB_MIN_SCORE = 0.15  # tune this (0.3–0.4 works well)
 KB_TOPK = 3
 KB_FINAL_K = 3
 
-def query_documents(query: str, path: str) -> list[str]:
+# def query_documents(query: str, path: str) -> list[str]:
+#     vs = get_vectorstore(_canon(path))
+#     docs_scores = vs.similarity_search_with_relevance_scores(query, k=KB_TOPK)
+
+#     kept: list[str] = []
+#     for doc, score in docs_scores:
+#         if score is None or score < KB_MIN_SCORE:
+#             continue
+#         kept.append(doc.page_content.strip())
+#         if len(kept) >= KB_FINAL_K:
+#             break
+
+#     return kept
+
+
+def query_documents(query: str, path: str) -> list[dict[str, Any]]:
     vs = get_vectorstore(_canon(path))
     docs_scores = vs.similarity_search_with_relevance_scores(query, k=KB_TOPK)
 
-    kept: list[str] = []
+    kept: list[dict[str, Any]] = []
     for doc, score in docs_scores:
         if score is None or score < KB_MIN_SCORE:
             continue
-        kept.append(doc.page_content.strip())
+        kept.append({
+            "text": doc.page_content.strip(),
+            "metadata": getattr(doc, "metadata", {}) or {},
+            "score": float(score),
+        })
         if len(kept) >= KB_FINAL_K:
             break
-
     return kept
 
 # def query_documents(query: str, path: str, top_k: int = 3) -> List[str]:
@@ -212,53 +241,296 @@ def prewarm_indexes(base_dir: str, limit: int | None = None) -> int:
 
 
 # to get formated response
+"""
+kb_answer_groq.py
+-----------------
 
-def generate_answer_from_context(question: str, kb_snippets: list, model: str = "gpt-4o-mini") -> str:
+Groq-grounded answer generator with robust error handling.
+
+- Uses Groq chat models via the official 'groq' SDK
+- Normalizes KB snippets (strings -> dicts with text/source/score)
+- Guarantees string return (never None) to avoid "Context Reply None"
+- Provides a helper to do KB-first, then fallback to a general model
+
+Env:
+  GROQ_API_KEY
+
+pip:
+  pip install groq
+"""
+
+
+
+# ───────────────────────── Logging ─────────────────────────
+
+logger = logging.getLogger("kb")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _fmt = logging.Formatter("[%(levelname)s] %(message)s")
+    _h.setFormatter(_fmt)
+    logger.addHandler(_h)
+logger.setLevel(logging.INFO)
+
+
+# ─────────────────────── Groq Client ───────────────────────
+
+# Common production Groq chat models (update as needed).
+SUPPORTED_GROQ_CHAT_MODELS = {
+    "llama-3.1-8b-instant",     # Fast + very cheap, 128k ctx
+    "llama-3.3-70b-versatile",  # Higher quality, 128k ctx
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
+    "openai/gpt-oss-20b",       # Example OpenAI-compat OSS model on Groq
+}
+
+DEFAULT_MODEL = "llama-3.1-8b-instant"
+
+
+def groq_client() -> Groq:
+    api_key = os.getenv("OPENAI_API_KEY") 
+    if not api_key:
+        raise RuntimeError("Missing GROQ_API_KEY in environment")
+    # Base URL defaults to Groq's API; override via GROQ_BASE_URL if needed.
+    return Groq(api_key=api_key)
+
+
+def normalize_model(m: Optional[str]) -> str:
+    if not m:
+        return DEFAULT_MODEL
+    m = m.strip()
+    # Be lenient about casing
+    lo = m.lower()
+    for allowed in SUPPORTED_GROQ_CHAT_MODELS:
+        if lo == allowed.lower():
+            return allowed
+    # Fallback to a safe default if unknown (prevents "'model' ... anyOf" errors)
+    return DEFAULT_MODEL
+
+
+# ───────────────────── Utility: Errors ─────────────────────
+
+def _format_groq_error(exc: Exception) -> str:
+    """
+    Produce a compact, readable error string for Groq SDK errors.
+    """
+    # The groq SDK exposes rich error classes with .status_code and .response
+    if isinstance(exc, groq.APIStatusError):
+        try:
+            body = exc.response.json()
+        except Exception:
+            body = exc.response.text if getattr(exc, "response", None) else str(exc)
+        code = getattr(exc, "status_code", "unknown")
+        return f"Error code: {code} - {json.dumps(body) if isinstance(body, dict) else body}"
+    if isinstance(exc, groq.APIConnectionError):
+        return "Connection error contacting Groq API"
+    if isinstance(exc, groq.RateLimitError):
+        return "Rate limit exceeded on Groq API"
+    # Generic fallback
+    return str(exc)
+
+
+# ─────────────── Utility: KB Snippet Preparation ───────────────
+
+def _normalize_kb_snippets(kb_snippets: List[Any]) -> List[Dict[str, Any]]:
+    """
+    Ensure each snippet has: {"text": str, "source": str, "score": float}
+    Drop empty texts. Sort by score desc.
+    """
+    norm: List[Dict[str, Any]] = []
+    for i, s in enumerate(kb_snippets, start=1):
+        if isinstance(s, str):
+            d = {"text": s, "source": f"snippet-{i}", "score": 0.0}
+        elif isinstance(s, dict):
+            d = {
+                "text": (s.get("text") or "").strip(),
+                "source": s.get("source", f"snippet-{i}"),
+                "score": float(s.get("score", 0.0)),
+            }
+        else:
+            # Coerce unexpected types to string
+            d = {"text": str(s), "source": f"snippet-{i}", "score": 0.0}
+
+        if d["text"]:
+            norm.append(d)
+
+    norm.sort(key=lambda x: x["score"], reverse=True)
+    return norm
+
+
+def _build_context_block(sorted_snips: List[Dict[str, Any]], max_snippets: int = 12) -> str:
+    parts: List[str] = []
+    for i, s in enumerate(sorted_snips[:max_snippets], start=1):
+        txt = re.sub(r"\s+", " ", s["text"]).strip()
+        src = s["source"]
+        parts.append(f"[S{i}] Source: {src}\n{txt}")
+    return "\n\n".join(parts)
+
+
+def _dedupe_lines(text: str) -> str:
+    """
+    Remove exact duplicate lines while preserving spacing reasonably.
+    Also collapses multiple blank lines into a single blank line.
+    """
+    seen = set()
+    out = []
+    last_blank = False
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        key = line.strip()
+        if not key:
+            if not last_blank and out:
+                out.append("")   # keep a single blank line
+            last_blank = True
+            continue
+        last_blank = False
+        if key not in seen:
+            out.append(line)
+            seen.add(key)
+    # Final pass: trim extra blank lines at start/end
+    result = "\n".join(out).strip()
+    return result
+
+
+# ─────────────── KB-grounded Answer Generator ───────────────
+
+def generate_answer_from_context(
+    question: str,
+    kb_snippets: List[Any],
+    model: str = DEFAULT_MODEL,
+    temperature: float = 0.2,
+    max_tokens: int = 600,
+) -> str:
     """
     Create a grounded answer from user question and knowledge base snippets.
 
-    kb_snippets should be a list of dicts like:
-      {"text": "...", "source": "path/or/url", "score": 0.12}
+    Returns a STRING always. On any failure, returns a "Knowledge base error: ..." message.
+
+    kb_snippets can be a list of dicts (text, source, score) or a list of strings.
     """
+    try:
+        if not kb_snippets:
+            return "I couldn’t find enough information in the knowledge base to answer that."
 
-    if not kb_snippets:
-        return "I couldn’t find enough information in the knowledge base to answer that."
+        normalized = _normalize_kb_snippets(kb_snippets)
+        if not normalized:
+            return "I couldn’t find enough information in the knowledge base to answer that."
 
-    # Sort snippets by best score
-    sorted_snips = sorted(kb_snippets, key=lambda s: s.get("score", 0.0))
+        context = _build_context_block(normalized)
 
-    # Format snippets into a reference block
-    context = ""
-    for i, s in enumerate(sorted_snips, start=1):
-        txt = re.sub(r"\s+", " ", s.get("text", "").strip())
-        src = s.get("source", f"snippet-{i}")
-        context += f"[S{i}] Source: {src}\n{txt}\n\n"
+        system_msg = textwrap.dedent("""
+        You are a precise assistant. Use ONLY the provided sources to answer.
+        - Support each claim with inline citations like [S1].
+        - Provide a single, concise answer (no repeated lists or sentences).
+        - Do not restate the same information twice.
+        - If the sources don't contain the answer, say so.
+        """).strip()
 
-    system_msg = textwrap.dedent("""
-    You are a precise assistant. Use ONLY the provided sources to answer.
-    - Support each claim with inline citations like [S1].
-    - If the sources don't contain the answer, say so.
-    - Be clear and concise.
-    """)
+        
+        user_msg = f"QUESTION:\n{question.strip()}\n\nSOURCES:\n{context}"
 
-    user_msg = f"QUESTION:\n{question.strip()}\n\nSOURCES:\n{context}"
+        client = groq_client()
+        safe_model = normalize_model(model)
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.2,
-        max_tokens=600,
+        resp = client.chat.completions.create(
+            model=safe_model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": user_msg},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+        content = (resp.choices[0].message.content or "").strip()
+        content = _dedupe_lines(content)  # ✅ remove duplicate lines/sentences
+        return content if content else "I couldn’t find enough information in the knowledge base to answer that."
+    except Exception as exc:
+        return f"Knowledge base error: {_format_groq_error(exc)}"
+
+
+
+
+# ─────────────── Generic (non-KB) Fallback on Groq ───────────────
+
+def generate_general_answer(
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    temperature: float = 0.2,
+    max_tokens: int = 500,
+) -> str:
+    """
+    Simple general Groq chat call to use as fallback if KB fails.
+    Always returns a string; on error, returns an error string.
+    """
+    try:
+        client = groq_client()
+        safe_model = normalize_model(model)
+        resp = client.chat.completions.create(
+            model=safe_model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as exc:
+        return f"General model error: {_format_groq_error(exc)}"
+
+
+# ─────────────── High-level: KB-first then fallback ───────────────
+
+def answer_with_kb_then_fallback(
+    question: str,
+    kb_snippets: List[Any],
+    model: str = DEFAULT_MODEL,
+) -> Tuple[Optional[str], str]:
+    """
+    Try KB-grounded answer first. If it fails or has no KB info, fall back.
+
+    Returns: (context_reply, final_reply)
+      - context_reply: None if KB unavailable/insufficient; else the KB-grounded text
+      - final_reply: what you should show to user (KB answer if present, else fallback)
+    """
+    kb_text = generate_answer_from_context(question, kb_snippets, model=model)
+    logger.debug("KB text (first 2k chars): %s", kb_text[:2000])
+
+    context_reply: Optional[str] = None
+    if kb_text.startswith("Knowledge base error:"):
+        logger.error(kb_text)  # keep the underlying error visible
+    elif "I couldn’t find enough information" in kb_text:
+        logger.info("KB had insufficient info for the question.")
+    else:
+        context_reply = kb_text
+
+    if context_reply:
+        return context_reply, context_reply
+
+    # Fallback to a general, safe answer
+    fallback_prompt = (
+        "Answer the user's question clearly and concisely.\n\n"
+        f"Question: {question.strip()}"
     )
-
-    return resp.choices[0].message.content.strip()
-
-
+    general = generate_general_answer(fallback_prompt, model=model)
+    return None, general
 
 
+# ─────────────── Example FAISS retrieval (stub) ───────────────
+# Replace with your actual FAISS retrieval (must return list[dict]).
 
+def dummy_retrieve_from_faiss(question: str) -> List[Dict[str, Any]]:
+    return []
+
+
+# ───────────────────────── CLI demo ─────────────────────────
+
+if __name__ == "__main__":
+    q = "What is a healthy resting heart rate for adults?"
+    kb = [
+        {"text": "Normal resting heart rate for adults is typically 60–100 bpm.", "source": "heartrate_guide.md", "score": 0.92},
+        {"text": "Athletes may have lower resting heart rates.", "source": "sports_cardio.pdf", "score": 0.55},
+    ]
+    ctx, reply = answer_with_kb_then_fallback(q, kb, model=DEFAULT_MODEL)
+    print("Context Reply:", ctx)
+    print("Final Reply:", reply)
 
 
 
