@@ -639,7 +639,7 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
                 mongo_query = generate_ai_mongo_query_with_fallback(tg, username, context_info)
                 personal_data = fetch_personal_data(mongo_query, username)
                 # print(f"📦 MongoDB Results for tag '{tg}':\n{json.dumps(personal_data, indent=2, default=str)}")
-                summary = build_comprehensive_context(personal_data, username)
+                summary = build_comprehensive_context(personal_data, username,question=augmented_user_q)
 
                 if summary and "No recent data" not in summary:
                     # all_contexts.append(f"🗂️ **{tg.title()} Summary:**\n{summary}")
@@ -670,7 +670,7 @@ def handle_user_message(request: ChatRequest, username: str) -> ChatResponse:
             personal_data = fetch_personal_data(mongo_query, username)
             # print(f"📦 MongoDB Results: {personal_data}")
 
-            personal_context = build_comprehensive_context(personal_data, username)
+            personal_context = build_comprehensive_context(personal_data, username, question=augmented_user_q)
             print("Personal_Context:")
 
             if personal_context and personal_context.strip() != "No recent data available for your query.":
