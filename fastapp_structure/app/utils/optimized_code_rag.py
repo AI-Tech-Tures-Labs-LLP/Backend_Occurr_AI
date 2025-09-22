@@ -419,7 +419,6 @@ def generate_answer_from_context(
 
         system_msg = textwrap.dedent("""
         You are a precise assistant. Use ONLY the provided sources to answer.
-        - Support each claim with inline citations like [S1].
         - Provide a single, concise answer (no repeated lists or sentences).
         - Do not restate the same information twice.
         - If the sources don't contain the answer, say so.
